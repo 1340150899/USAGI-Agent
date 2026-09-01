@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "usagi-agent"
+version = "0.1.0"
+description = "USAGI: a business-agnostic Agent engineering framework on top of LangGraph"
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "USAGI" }]
+dependencies = [
+    "langgraph>=0.2",
+    "langchain-core>=0.3",
+    "pydantic>=2.5",
+    "pydantic-settings>=2.0",
+    "opentelemetry-api>=1.20",
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-exporter-otlp>=1.20",
+]
+
+[project.optional-dependencies]
+sqlite = ["aiosqlite>=0.19", "sqlalchemy>=2.0"]
+dev = ["pytest>=7", "pytest-asyncio>=0.21"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
