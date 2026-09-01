@@ -8,16 +8,18 @@ from langchain_core.runnables import RunnableConfig
 
 from usagi_agent.kernel.context import RunContext
 from usagi_agent.pipelines.loop.state import AgentRunState
+from usagi_agent.pipelines.processor import PipelineProcessor
+from usagi_agent.pipelines.rules import StatePatch
 from usagi_agent.scenarios.config import ScenarioConfig
 
 if TYPE_CHECKING:
     from usagi_agent.server.runtime import ServerRuntime
 
-StageMethod = Callable[[AgentRunState, "ServerRuntime", RunContext], Awaitable[dict[str, object]]]
+StageProcess = Callable[[AgentRunState, RunContext], Awaitable[StatePatch]]
 
 
 def _wrap_stage(
-    method: StageMethod,
+    process: StageProcess,
     runtime: "ServerRuntime",
     *,
     budget,
@@ -42,7 +44,7 @@ def _wrap_stage(
                 return {"pass_disposition": "run_failed"}
             if state.get("action_type") == "delegate" and delegation_count >= limits[1]:
                 return {"pass_disposition": "run_failed"}
-        result = await method(state, runtime, context)
+        result = await process(state, context)
         if not isinstance(result, dict):
             raise TypeError("pipeline stage must return dict")
         if limits is not None:
@@ -61,19 +63,30 @@ class PipelineCompiler:
     def __init__(self, state_schema: type = AgentRunState) -> None:
         self._state_schema = state_schema
 
-    def compile(self, scenario: ScenarioConfig, runtime: "ServerRuntime", *, checkpointer=None) -> Any:
+    def compile(
+        self,
+        scenario: ScenarioConfig,
+        runtime: "ServerRuntime",
+        *,
+        checkpointer=None,
+    ) -> Any:
         pipeline = scenario.pipeline
-        stages: tuple[tuple[str, StageMethod], ...] = (
-            ("pre_recall", pipeline.pre_recall.pre_recall),
-            ("recall", pipeline.recall.recall),
-            ("context_build", pipeline.context_build.build_context),
-            ("model", pipeline.model.model),
-            ("result_process", pipeline.result_process.process_result),
-            ("end", pipeline.end.end),
+        processor = PipelineProcessor(pipeline, runtime)
+        stages: tuple[tuple[str, StageProcess], ...] = (
+            ("pre_recall", processor.process_pre_recall),
+            ("recall", processor.process_recall),
+            ("context_build", processor.process_context_build),
+            ("model", processor.process_model),
+            ("result_process", processor.process_result),
+            ("end", processor.process_end),
         )
         graph: StateGraph = StateGraph(self._state_schema)
         for name, method in stages:
-            limits = (pipeline.max_tool_calls, pipeline.max_delegations) if name == "end" else None
+            limits = (
+                (pipeline.max_tool_calls, pipeline.max_delegations)
+                if name == "end"
+                else None
+            )
             graph.add_node(
                 name, _wrap_stage(method, runtime, budget=pipeline.budget, limits=limits)
             )
@@ -82,7 +95,10 @@ class PipelineCompiler:
             graph.add_edge(source, target)
 
         async def next_pass(state: AgentRunState) -> str:
-            if state.get("pass_disposition") == "next_pass" and state.get("iteration", 0) < pipeline.max_passes:
+            if (
+                state.get("pass_disposition") == "next_pass"
+                and state.get("iteration", 0) < pipeline.max_passes
+            ):
                 return "pre_recall"
             return END
 

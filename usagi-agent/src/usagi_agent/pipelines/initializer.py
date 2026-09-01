@@ -39,11 +39,15 @@ class ScenarioPipelineInitializer:
             )
             agent = runtime.agent_manager.get(scenario.agent_id)
             tool_specs = runtime.tool_manager.get_specs(agent.allowed_tools)
-            adapters = (
-                scenario.pipeline.pre_recall, scenario.pipeline.recall,
-                scenario.pipeline.context_build, scenario.pipeline.model,
-                scenario.pipeline.result_process, scenario.pipeline.end,
+            stages = (
+                scenario.pipeline.pre_recall,
+                scenario.pipeline.recall,
+                scenario.pipeline.context_build,
+                scenario.pipeline.model,
+                scenario.pipeline.result_process,
+                scenario.pipeline.end,
             )
+            adapters = tuple(adapter for stage in stages for adapter in stage)
             definition = {
                 "scenario": scenario.model_dump(mode="json"),
                 "agent": agent.model_dump(mode="json"),
@@ -78,13 +82,17 @@ class ScenarioPipelineInitializer:
             (scenario.pipeline.end, StageType.END),
         )
         names: set[str] = set()
-        for adapter, expected_type in stages:
-            if adapter.type != expected_type:
-                raise BundleValidationError(
-                    f"stage {adapter.name!r} has type {adapter.type!r}; expected {expected_type!r}"
-                )
-            if not adapter.name.strip():
-                raise BundleValidationError(f"{expected_type} stage name must not be empty")
-            if adapter.name in names:
-                raise BundleValidationError(f"duplicate stage name: {adapter.name}")
-            names.add(adapter.name)
+        for adapters, expected_type in stages:
+            for adapter in adapters:
+                if adapter.type != expected_type:
+                    raise BundleValidationError(
+                        f"stage rule {adapter.name!r} has type {adapter.type!r}; "
+                        f"expected {expected_type!r}"
+                    )
+                if not adapter.name.strip():
+                    raise BundleValidationError(
+                        f"{expected_type} stage rule name must not be empty"
+                    )
+                if adapter.name in names:
+                    raise BundleValidationError(f"duplicate stage rule name: {adapter.name}")
+                names.add(adapter.name)

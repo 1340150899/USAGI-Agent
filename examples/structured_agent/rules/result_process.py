@@ -2,16 +2,23 @@ import hashlib
 
 from usagi_agent.kernel import RunContext
 from usagi_agent.pipelines.artifacts import get_model, put_model
-from usagi_agent.pipelines.loop.state import AgentRunState
-from usagi_agent.pipelines.rules import ResultProcessAdapterConfig, StatePatch
+from usagi_agent.pipelines.rules import (
+    ResultProcessAdapterConfig,
+    ResultProcessRuleInput,
+    ResultProcessRuleOutput,
+)
 from usagi_agent.types.action import FailureAction, FinalAction, SafeErrorRecord
 from usagi_agent.types.model import ModelResponse
 
 
 class ResearchWriterResultProcessConfig(ResultProcessAdapterConfig):
-    async def process_result(self, state: AgentRunState, runtime, context: RunContext) -> StatePatch:
+    async def process_result(
+        self, input: ResultProcessRuleInput, runtime, context: RunContext
+    ) -> ResultProcessRuleOutput:
         response = await get_model(
-            runtime.persistence.artifact_manager, state.get("model_response_ref", ""), ModelResponse
+            runtime.persistence.artifact_manager,
+            input.model_response_ref,
+            ModelResponse,
         )
         if response is None:
             action = FailureAction(
@@ -32,10 +39,10 @@ class ResearchWriterResultProcessConfig(ResultProcessAdapterConfig):
             action,
             tenant_id=context.tenant_id,
             scope_id=context.run_id,
-            operation_id=f"action:{context.run_id}:{state.get('iteration', 0)}",
+            operation_id=f"action:{context.run_id}:{input.iteration}",
         )
-        return {
-            "action_type": action_type,
-            "action_hash": hashlib.sha256(action.model_dump_json().encode()).hexdigest(),
-            "agent_action_ref": ref,
-        }
+        return ResultProcessRuleOutput(
+            action_type=action_type,
+            action_hash=hashlib.sha256(action.model_dump_json().encode()).hexdigest(),
+            agent_action_ref=ref,
+        )

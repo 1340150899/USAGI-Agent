@@ -73,16 +73,18 @@ def test_pipeline_init_reuses_service_instances_and_scenario_has_no_tools():
     scenario = runtime.scenario_registry.get("example.research_writer")
     assert runtime.persistence is persistence
     assert "tools" not in scenario.config.model_dump()
-    for adapter in (
+    stages = (
         scenario.config.pipeline.pre_recall,
         scenario.config.pipeline.recall,
         scenario.config.pipeline.context_build,
         scenario.config.pipeline.model,
         scenario.config.pipeline.result_process,
         scenario.config.pipeline.end,
-    ):
-        assert "version" not in type(adapter).model_fields
-        assert adapter.name and adapter.type
+    )
+    for stage in stages:
+        for adapter in stage:
+            assert "version" not in type(adapter).model_fields
+            assert adapter.name and adapter.type
     asyncio.run(runtime.shutdown())
 
 
