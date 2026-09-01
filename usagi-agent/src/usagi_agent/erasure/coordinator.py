@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import cast
 
 from usagi_agent.api.errors import UsagiError
 from usagi_agent.erasure.control import ErasureControlState, ErasureReceipt
@@ -66,8 +67,13 @@ class ErasureCoordinator:
             except Exception:
                 pass  # TODO(§24.5): per-Store matrix verification, not silent swallow in prod.
         # 3. delete the checkpoint thread (if the checkpointer supports authorized admin)
-        admin = self._ports.checkpointer
-        if isinstance(admin, AuthorizedCheckpointAdmin):
+        checkpointer: object = self._ports.checkpointer
+        admin = (
+            cast(AuthorizedCheckpointAdmin, checkpointer)
+            if isinstance(checkpointer, AuthorizedCheckpointAdmin)
+            else None
+        )
+        if admin is not None:
             permit = DestructivePermit(
                 tenant_id=self._tenant, thread_id=scope, control_kind="erasure",
                 control_id=state.erasure_case_id,
@@ -83,7 +89,7 @@ class ErasureCoordinator:
         # 5. record the receipt and complete
         receipt = ErasureReceipt(
             erasure_case_id=state.erasure_case_id, completed_at=_now(),
-            scope_deleted=[scope], threads_deleted=[scope] if isinstance(admin, AuthorizedCheckpointAdmin) else [],
+            scope_deleted=[scope], threads_deleted=[scope] if admin is not None else [],
             keys_destroyed=[],  # TODO(§24.5): KeyDestructionStore for scope/derivation DEKs
         )
         done = state.model_copy(update={

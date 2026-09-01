@@ -2,7 +2,7 @@
 
 The first business application built on the USAGI framework (design §28, app architecture
 doc). This is a **skeleton only** — real adapters (wxauto message source, social-auto-upload
-publisher) are not implemented here. The framework core (`packages/usagi-agent`) must not
+publisher) are not implemented here. The framework core (`usagi-agent`) must not
 contain any xiaohongshu / wechat / post business concept (§3).
 
 Planned layout (per app architecture doc §10):

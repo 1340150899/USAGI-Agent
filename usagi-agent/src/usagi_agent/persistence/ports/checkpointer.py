@@ -9,7 +9,7 @@ transaction as the checkpoint write.
 """
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
@@ -23,6 +23,8 @@ __all__ = ["BaseCheckpointSaver", "AuthorizedCheckpointAdmin"]
 @runtime_checkable
 class AuthorizedCheckpointAdmin(Protocol):
     """Business-facing thread deletion (§10.6). ``run_id``/tenant come from binding."""
+
+    supports_authorized_delete: Literal[True]
 
     async def delete_thread(
         self, tenant_id: str, thread_id: str, permit: DestructivePermit

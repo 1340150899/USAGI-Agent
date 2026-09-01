@@ -5,4 +5,11 @@ from examples.structured_agent.rules.pre_recall import ResearchWriterPreRecallCo
 from examples.structured_agent.rules.recall import ResearchWriterRecallConfig
 from examples.structured_agent.rules.result_process import ResearchWriterResultProcessConfig
 
-__all__ = [name for name in globals() if name.startswith("ResearchWriter")]
+__all__ = [
+    "ResearchWriterContextBuildConfig",
+    "ResearchWriterEndConfig",
+    "ResearchWriterModelConfig",
+    "ResearchWriterPreRecallConfig",
+    "ResearchWriterRecallConfig",
+    "ResearchWriterResultProcessConfig",
+]

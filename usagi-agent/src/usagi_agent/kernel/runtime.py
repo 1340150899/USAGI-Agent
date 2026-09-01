@@ -516,10 +516,14 @@ class KernelRuntime:
         state = await self._ports.run_control_store.get(run_id)
         if state is None:
             raise UsagiError(f"run_control {run_id} not found after start")
+        snapshot = await self._ports.execution_context_store.get(run_id)
+        if snapshot is None:
+            raise UsagiError(f"execution context {run_id} not found after start")
         outcome = self._project(run_id, state)
-        scenario = state.scenario_key if hasattr(state, "scenario_key") else ""
         return RunHandle(
-            run_id=run_id, thread_id=run_id, scenario_key=scenario,
+            run_id=run_id,
+            thread_id=snapshot.thread_id,
+            scenario_key=snapshot.scenario_key,
             outcome=outcome, created_at=_now(),
         )
 
@@ -591,5 +595,3 @@ class KernelRuntime:
                 reason_code=state.cancellation_reason_code or CancellationReasonCode.USER_REQUEST,
             )
         return Running(run_id=run_id, started_at=_now(), scenario_key="")
-    InterruptDescriptor,
-    ResumeTokenEnvelope,

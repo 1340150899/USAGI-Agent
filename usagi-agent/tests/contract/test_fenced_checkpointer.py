@@ -8,6 +8,8 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import Checkpoint, empty_checkpoint
 
 from usagi_agent.api.errors import FencingGateError
 from usagi_agent.persistence.backend import make_run_gate_verifier
@@ -36,15 +38,24 @@ def _state(run_id="r1", token=5) -> RunControlState:
     )
 
 
+def _checkpoint(value: int) -> Checkpoint:
+    checkpoint = empty_checkpoint()
+    checkpoint["channel_values"]["v"] = value
+    return checkpoint
+
+
 @pytest.mark.asyncio
 async def test_inmemory_good_gate_allows_write():
     rc = InMemoryRunControlStore()
     await rc.create(_state())
     cp = InMemoryFencedCheckpointer(gate_verifier=make_run_gate_verifier(rc))
-    cfg = {"configurable": {"thread_id": "r1", "fencing_gate": _gate("r1", 5)}}
-    await cp.aput(cfg, {"v": 1}, {"step": 0}, {})
-    tup = await cp.aget_tuple({"configurable": {"thread_id": "r1"}})
-    assert tup and tup.checkpoint == {"v": 1}
+    cfg: RunnableConfig = {
+        "configurable": {"thread_id": "r1", "fencing_gate": _gate("r1", 5)}
+    }
+    await cp.aput(cfg, _checkpoint(1), {"step": 0}, {})
+    read_config: RunnableConfig = {"configurable": {"thread_id": "r1"}}
+    tup = await cp.aget_tuple(read_config)
+    assert tup and tup.checkpoint["channel_values"]["v"] == 1
 
 
 @pytest.mark.asyncio
@@ -52,9 +63,11 @@ async def test_inmemory_bad_token_rejected():
     rc = InMemoryRunControlStore()
     await rc.create(_state(token=5))
     cp = InMemoryFencedCheckpointer(gate_verifier=make_run_gate_verifier(rc))
-    cfg = {"configurable": {"thread_id": "r1", "fencing_gate": _gate("r1", 999)}}
+    cfg: RunnableConfig = {
+        "configurable": {"thread_id": "r1", "fencing_gate": _gate("r1", 999)}
+    }
     with pytest.raises(FencingGateError):
-        await cp.aput(cfg, {"v": 2}, {"step": 1}, {})
+        await cp.aput(cfg, _checkpoint(2), {"step": 1}, {})
 
 
 @pytest.mark.asyncio
@@ -65,13 +78,29 @@ async def test_sqlite_durable_round_trip_and_bad_gate():
     rc = SqliteRunControlStore(db)
     cp = SqliteFencedCheckpointer(db)
     await rc.create(_state("r1", 5))
-    cfg = {"configurable": {"thread_id": "r1", "tenant_id": "default", "fencing_gate": _gate("r1", 5)}}
-    await cp.aput(cfg, {"v": 1}, {"step": 0}, {})
-    tup = await cp.aget_tuple({"configurable": {"thread_id": "r1", "tenant_id": "default"}})
-    assert tup.checkpoint == {"v": 1}
+    cfg: RunnableConfig = {
+        "configurable": {
+            "thread_id": "r1",
+            "tenant_id": "default",
+            "fencing_gate": _gate("r1", 5),
+        }
+    }
+    await cp.aput(cfg, _checkpoint(1), {"step": 0}, {})
+    read_config: RunnableConfig = {
+        "configurable": {"thread_id": "r1", "tenant_id": "default"}
+    }
+    tup = await cp.aget_tuple(read_config)
+    assert tup is not None
+    assert tup.checkpoint["channel_values"]["v"] == 1
+    bad_config: RunnableConfig = {
+        "configurable": {
+            "thread_id": "r1",
+            "tenant_id": "default",
+            "fencing_gate": _gate("r1", 999),
+        }
+    }
     with pytest.raises(FencingGateError):
-        await cp.aput({"configurable": {"thread_id": "r1", "tenant_id": "default", "fencing_gate": _gate("r1", 999)}},
-                      {"v": 2}, {"step": 1}, {})
+        await cp.aput(bad_config, _checkpoint(2), {"step": 1}, {})
 
 
 def test_thread_control_binding_global_unique():

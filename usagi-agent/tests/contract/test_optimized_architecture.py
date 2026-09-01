@@ -4,7 +4,7 @@ import asyncio
 import pytest
 
 from examples.structured_agent.agent import RESEARCH_WRITER_AGENT
-from examples.structured_agent.configs import SCENARIO_CONFIGS
+from configs import SCENARIO_CONFIGS
 from examples.structured_agent.model_adapter import ScriptedModelAdapter
 from examples.structured_agent.tools import SearchToolAdapter
 from usagi_agent.api.errors import UnknownToolError
@@ -44,7 +44,9 @@ class _HealthFailureProbe:
 def test_tool_spec_is_the_minimal_function_contract():
     assert set(ToolSpec.model_fields) == {"name", "description", "parameters"}
     spec = SearchToolAdapter.spec
-    assert to_model_tool(spec)["function"]["name"] == "web_search"
+    function = to_model_tool(spec)["function"]
+    assert isinstance(function, dict)
+    assert function["name"] == "web_search"
 
 
 def test_service_init_registers_only_builtins_and_does_not_compile_scenarios():

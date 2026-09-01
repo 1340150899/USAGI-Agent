@@ -11,6 +11,8 @@ directly (decoupling: the checkpointer takes a callable, not a Store).
 """
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
@@ -51,7 +53,7 @@ from usagi_agent.persistence.ports.erasure import (
     LineageIndex,
 )
 from usagi_agent.persistence.ports.memory import MemoryStore, VectorStore
-from usagi_agent.persistence.ports.outbox import EventBus, OutboxStore
+from usagi_agent.persistence.ports.outbox import DurableOutboxEvent, EventBus, OutboxStore
 from usagi_agent.persistence.ports.run_lifecycle import (
     ExecutionContextStore,
     InterruptCredentialStore,
@@ -129,10 +131,23 @@ class InMemoryEventBus:
     """Minimal in-process event bus for the dev backend."""
 
     def __init__(self) -> None:
-        self._subscribers: dict[str, list] = {}
+        self._subscribers: dict[str, list[asyncio.Queue[DurableOutboxEvent]]] = {}
 
-    def subscribe(self, event_type: str):
-        raise NotImplementedError("InMemoryEventBus.subscribe is a placeholder; use OutboxStore polling for dev.")
+    async def subscribe(self, event_type: str) -> AsyncIterator[DurableOutboxEvent]:
+        queue: asyncio.Queue[DurableOutboxEvent] = asyncio.Queue()
+        subscribers = self._subscribers.setdefault(event_type, [])
+        subscribers.append(queue)
+        try:
+            while True:
+                yield await queue.get()
+        finally:
+            subscribers.remove(queue)
+            if not subscribers:
+                self._subscribers.pop(event_type, None)
+
+    async def publish(self, event: DurableOutboxEvent) -> None:
+        for queue in tuple(self._subscribers.get(event.event_type, ())):
+            await queue.put(event)
 
 
 class PersistenceInitializer:

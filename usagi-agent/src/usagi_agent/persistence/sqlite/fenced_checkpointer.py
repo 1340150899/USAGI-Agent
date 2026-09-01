@@ -11,21 +11,36 @@ import pickle
 import uuid
 from collections.abc import AsyncIterator, Iterator, Sequence
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
-from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import (
+    BaseCheckpointSaver,
+    ChannelVersions,
+    Checkpoint,
+    CheckpointMetadata,
+    CheckpointTuple,
+    PendingWrite,
+)
 
 from usagi_agent.api.errors import FencingGateError
 from usagi_agent.persistence.sqlite.schema import apply_schema
 from usagi_agent.types.settlement import FencingGate
 
 
-def _cfg(config, key, default=None):
+def _cfg(config: RunnableConfig | None, key: str, default: Any = None) -> Any:
     return ((config or {}).get("configurable") or {}).get(key, default)
 
 
-def _gate(config) -> FencingGate | None:
-    return _cfg(config, "fencing_gate")
+def _gate(config: RunnableConfig) -> FencingGate | None:
+    value = _cfg(config, "fencing_gate")
+    return value if isinstance(value, FencingGate) else None
+
+
+def _with_checkpoint_id(config: RunnableConfig, checkpoint_id: str) -> RunnableConfig:
+    configurable = dict(config.get("configurable", {}))
+    configurable["checkpoint_id"] = checkpoint_id
+    return cast(RunnableConfig, {**config, "configurable": configurable})
 
 
 class SqliteFencedCheckpointer(BaseCheckpointSaver):
@@ -67,7 +82,13 @@ class SqliteFencedCheckpointer(BaseCheckpointSaver):
         if not row:
             raise FencingGateError("sqlite fencing gate verification failed")
 
-    async def aput(self, config, checkpoint, metadata, new_versions):
+    async def aput(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
         gate = _gate(config)
         thread_id = _cfg(config, "thread_id", "")
         tenant_id = _cfg(config, "tenant_id", "default")
@@ -85,10 +106,15 @@ class SqliteFencedCheckpointer(BaseCheckpointSaver):
                  datetime.now(timezone.utc).isoformat()),
             )
             await conn.commit()
-        new_config = {**config, "configurable": {**config.get("configurable", {}), "checkpoint_id": new_id}}
-        return new_config
+        return _with_checkpoint_id(config, new_id)
 
-    async def aput_writes(self, config, writes, task_id, task_path=""):
+    async def aput_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
         gate = _gate(config)
         thread_id = _cfg(config, "thread_id", "")
         tenant_id = _cfg(config, "tenant_id", "default")
@@ -106,7 +132,7 @@ class SqliteFencedCheckpointer(BaseCheckpointSaver):
                 )
             await conn.commit()
 
-    async def aget_tuple(self, config):
+    async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         thread_id = _cfg(config, "thread_id", "")
         tenant_id = _cfg(config, "tenant_id", "default")
         checkpoint_id = _cfg(config, "checkpoint_id")
@@ -129,23 +155,31 @@ class SqliteFencedCheckpointer(BaseCheckpointSaver):
                 return None
             ckpt_id, parent_id, blob, meta_blob = row
             wcur = await conn.execute(
-                "SELECT channel, value FROM checkpoint_writes "
+                "SELECT task_id, channel, value FROM checkpoint_writes "
                 "WHERE tenant_id = ? AND thread_id = ? AND checkpoint_id = ?",
                 (tenant_id, thread_id, ckpt_id),
             )
-            pending = [(c, pickle.loads(v)) for c, v in await wcur.fetchall()]
+            pending: list[PendingWrite] = [
+                (task_id, channel, pickle.loads(value))
+                for task_id, channel, value in await wcur.fetchall()
+            ]
             await wcur.close()
-            parent_config = (
-                {**config, "configurable": {**config.get("configurable", {}), "checkpoint_id": parent_id}}
-                if parent_id else None
-            )
-            cfg = {**config, "configurable": {**config.get("configurable", {}), "checkpoint_id": ckpt_id}}
+            parent_config = _with_checkpoint_id(config, parent_id) if parent_id else None
+            cfg = _with_checkpoint_id(config, ckpt_id)
             return CheckpointTuple(
                 config=cfg, checkpoint=pickle.loads(blob), metadata=pickle.loads(meta_blob),
                 parent_config=parent_config, pending_writes=pending,
             )
 
-    async def alist(self, config, *, filter=None, before=None, limit=None) -> AsyncIterator[CheckpointTuple]:
+    async def alist(
+        self,
+        config: RunnableConfig | None,
+        *,
+        filter: dict[str, Any] | None = None,
+        before: RunnableConfig | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[CheckpointTuple]:
+        config = config or cast(RunnableConfig, {})
         thread_id = _cfg(config, "thread_id", "")
         tenant_id = _cfg(config, "tenant_id", "default")
         async with self._connect() as conn:
@@ -154,16 +188,13 @@ class SqliteFencedCheckpointer(BaseCheckpointSaver):
                 "WHERE tenant_id = ? AND thread_id = ? ORDER BY created_at DESC",
                 (tenant_id, thread_id),
             )
-            rows = await cur.fetchall()
+            rows = list(await cur.fetchall())
             await cur.close()
         if limit:
             rows = rows[:limit]
         for ckpt_id, parent_id, blob, meta_blob in rows:
-            cfg = {**config, "configurable": {**config.get("configurable", {}), "checkpoint_id": ckpt_id}}
-            parent_config = (
-                {**config, "configurable": {**config.get("configurable", {}), "checkpoint_id": parent_id}}
-                if parent_id else None
-            )
+            cfg = _with_checkpoint_id(config, ckpt_id)
+            parent_config = _with_checkpoint_id(config, parent_id) if parent_id else None
             yield CheckpointTuple(
                 config=cfg, checkpoint=pickle.loads(blob), metadata=pickle.loads(meta_blob),
                 parent_config=parent_config, pending_writes=[],

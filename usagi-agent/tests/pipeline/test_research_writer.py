@@ -4,11 +4,11 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
 from examples.structured_agent.run import build_server
 from examples.structured_agent.agent import RESEARCH_WRITER_AGENT
-from examples.structured_agent.configs import SCENARIO_CONFIGS
+from configs import SCENARIO_CONFIGS
 from examples.structured_agent.model_adapter import ScriptedModelAdapter
 from examples.structured_agent.tools import SearchToolAdapter
 from usagi_agent.api.errors import IdempotencyConflictError, PolicyDeniedError
@@ -20,7 +20,12 @@ from usagi_agent.types.action import ToolAction
 from usagi_agent.types.model import ModelRequest, ModelResponse
 from usagi_agent.types.policy import PolicyDecision
 from usagi_agent.types.refs import ArtifactRef, PrincipalRef
-from usagi_agent.types.run import ApprovalResume, RunOptions, RunStartRequest
+from usagi_agent.types.run import (
+    ApprovalResume,
+    CancellationReasonCode,
+    RunOptions,
+    RunStartRequest,
+)
 
 
 class _Request(BaseModel):
@@ -131,7 +136,7 @@ async def test_run_access_checks_owner_and_scope():
     with pytest.raises(PolicyDeniedError):
         await server.cancel(
             started.run_id,
-            reason_code="user_request",
+            reason_code=CancellationReasonCode.USER_REQUEST,
             auth=AuthContext(principal=owner, authorization_scope=("run.read",)),
         )
     with pytest.raises(PolicyDeniedError):
@@ -173,7 +178,7 @@ async def test_require_approval_suspends_and_approved_resume_completes():
             ApprovalResume(
                 interrupt_id=descriptor.interrupt_id,
                 expected_checkpoint_id=descriptor.checkpoint_id,
-                resume_token="invalid-token",
+                resume_token=SecretStr("invalid-token"),
                 approval_id=approval.approval_id,
                 expected_approval_version=approval.version,
                 approval_scope=approval.approval_scope,
@@ -219,6 +224,7 @@ async def test_rejected_approval_fails_without_executing_tool():
         authorization_scope=("run.execute", "run.read", "run.resume"),
     )
     handle = await server.start_agent(_request("approval-reject"), auth=auth)
+    assert handle.outcome.kind == "suspended"
     descriptor = handle.outcome.interrupts[0]
     approval = await runtime.persistence.approval_store.get(descriptor.interrupt_id)
     assert approval is not None

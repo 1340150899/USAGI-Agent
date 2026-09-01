@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from examples.structured_agent.rules import (
     ResearchWriterContextBuildConfig,
     ResearchWriterEndConfig,
@@ -34,6 +36,10 @@ RESEARCH_WRITER_SCENARIO = ScenarioConfig(
         max_passes=5,
         max_tool_calls=10,
         max_delegations=0,
-        budget=Budget(max_total_cost="1.0", max_input_tokens=100000, max_output_tokens=20000),
+        budget=Budget(
+            max_total_cost=Decimal("1.0"),
+            max_input_tokens=100000,
+            max_output_tokens=20000,
+        ),
     ),
 )

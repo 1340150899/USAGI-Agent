@@ -1,0 +1,11 @@
+{
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/usagi-agent/src",
+    "${workspaceFolder}/usagi-agent"
+  ],
+  "python.testing.pytestArgs": [
+    "usagi-agent/tests"
+  ],
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false
+}

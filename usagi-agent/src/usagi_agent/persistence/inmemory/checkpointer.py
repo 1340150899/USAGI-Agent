@@ -13,11 +13,17 @@ from __future__ import annotations
 import threading
 import uuid
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Any, Callable, Awaitable
+from typing import Any, Awaitable, Callable, cast
+
+from langchain_core.runnables import RunnableConfig
 
 from langgraph.checkpoint.base import (
     BaseCheckpointSaver,
+    ChannelVersions,
+    Checkpoint,
+    CheckpointMetadata,
     CheckpointTuple,
+    PendingWrite,
 )
 
 from usagi_agent.api.errors import FencingGateError
@@ -26,22 +32,35 @@ from usagi_agent.types.settlement import FencingGate
 GateVerifier = Callable[[FencingGate], Awaitable[bool]]
 
 
-def _cfg(config: dict, key: str, default=None):
+def _cfg(config: RunnableConfig | None, key: str, default: Any = None) -> Any:
     """Read config["configurable"][key]."""
     configurable = (config or {}).get("configurable", {}) or {}
     return configurable.get(key, default)
 
 
-def _thread_id(config: dict) -> str:
-    return _cfg(config, "thread_id", default="")
+def _thread_id(config: RunnableConfig | None) -> str:
+    value = _cfg(config, "thread_id", default="")
+    return value if isinstance(value, str) else ""
 
 
-def _checkpoint_id(config: dict) -> str | None:
-    return _cfg(config, "checkpoint_id", default=None)
+def _checkpoint_id(config: RunnableConfig | None) -> str | None:
+    value = _cfg(config, "checkpoint_id", default=None)
+    return value if isinstance(value, str) else None
 
 
-def _checkpoint_ns(config: dict) -> str:
-    return _cfg(config, "checkpoint_ns", default="")
+def _checkpoint_ns(config: RunnableConfig | None) -> str:
+    value = _cfg(config, "checkpoint_ns", default="")
+    return value if isinstance(value, str) else ""
+
+
+def _with_checkpoint_id(
+    config: RunnableConfig, checkpoint_id: str, *, checkpoint_ns: str | None = None
+) -> RunnableConfig:
+    configurable = dict(config.get("configurable", {}))
+    configurable["checkpoint_id"] = checkpoint_id
+    if checkpoint_ns is not None:
+        configurable["checkpoint_ns"] = checkpoint_ns
+    return cast(RunnableConfig, {**config, "configurable": configurable})
 
 
 class InMemoryFencedCheckpointer(BaseCheckpointSaver):
@@ -58,7 +77,7 @@ class InMemoryFencedCheckpointer(BaseCheckpointSaver):
 
     # --- gate verification (async only; sync path skips for dev) ---
 
-    async def _verify_gate(self, config: dict) -> None:
+    async def _verify_gate(self, config: RunnableConfig) -> None:
         if self._gate_verifier is None:
             return
         gate = _cfg(config, "fencing_gate", default=None)
@@ -70,7 +89,13 @@ class InMemoryFencedCheckpointer(BaseCheckpointSaver):
 
     # --- sync storage primitives (shared by sync + async API) ---
 
-    def _put_sync(self, config, checkpoint, metadata, new_versions):
+    def _put_sync(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
         thread_id = _thread_id(config)
         with self._lock:
             latest = self._checkpoints.get(thread_id, [])
@@ -84,17 +109,22 @@ class InMemoryFencedCheckpointer(BaseCheckpointSaver):
             }
             latest.append(entry)
             self._checkpoints[thread_id] = latest
-            new_config = {**config, "configurable": {**(config.get("configurable", {})), "checkpoint_id": new_id}}
-            return new_config
+            return _with_checkpoint_id(config, new_id)
 
-    def _put_writes_sync(self, config, writes, task_id, task_path=""):
+    def _put_writes_sync(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
         thread_id = _thread_id(config)
         ckpt_id = _checkpoint_id(config) or ""
         key = (thread_id, ckpt_id, task_id, task_path)
         with self._lock:
             self._writes.setdefault(key, []).extend(writes)
 
-    def _get_tuple_sync(self, config):
+    def _get_tuple_sync(self, config: RunnableConfig) -> CheckpointTuple | None:
         thread_id = _thread_id(config)
         ckpt_id = _checkpoint_id(config)
         with self._lock:
@@ -108,16 +138,13 @@ class InMemoryFencedCheckpointer(BaseCheckpointSaver):
             if entry is None:
                 return None
             parent_id = entry["parent_checkpoint_id"]
-            parent_config = (
-                {**config, "configurable": {**config.get("configurable", {}), "checkpoint_id": parent_id}}
-                if parent_id else None
-            )
+            parent_config = _with_checkpoint_id(config, parent_id) if parent_id else None
             ns = _checkpoint_ns(config)
-            pending = []
+            pending: list[PendingWrite] = []
             for (tid, cid, tid2, tp), w in self._writes.items():
                 if tid == thread_id and cid == entry["checkpoint_id"]:
-                    pending.extend(w)
-            cfg = {**config, "configurable": {**config.get("configurable", {}), "checkpoint_id": entry["checkpoint_id"], "checkpoint_ns": ns}}
+                    pending.extend((tid2, channel, value) for channel, value in w)
+            cfg = _with_checkpoint_id(config, entry["checkpoint_id"], checkpoint_ns=ns)
             return CheckpointTuple(
                 config=cfg,
                 checkpoint=entry["checkpoint"],
@@ -126,7 +153,15 @@ class InMemoryFencedCheckpointer(BaseCheckpointSaver):
                 pending_writes=pending,
             )
 
-    def _list_sync(self, config, *, filter=None, before=None, limit=None):
+    def _list_sync(
+        self,
+        config: RunnableConfig | None,
+        *,
+        filter: dict[str, Any] | None = None,
+        before: RunnableConfig | None = None,
+        limit: int | None = None,
+    ) -> Iterator[CheckpointTuple]:
+        config = config or cast(RunnableConfig, {})
         thread_id = _thread_id(config)
         with self._lock:
             entries = list(reversed(self._checkpoints.get(thread_id, [])))
@@ -136,12 +171,9 @@ class InMemoryFencedCheckpointer(BaseCheckpointSaver):
             if limit:
                 entries = entries[:limit]
             for entry in entries:
-                cfg = {**config, "configurable": {**config.get("configurable", {}), "checkpoint_id": entry["checkpoint_id"]}}
+                cfg = _with_checkpoint_id(config, entry["checkpoint_id"])
                 parent_id = entry["parent_checkpoint_id"]
-                parent_config = (
-                    {**config, "configurable": {**config.get("configurable", {}), "checkpoint_id": parent_id}}
-                    if parent_id else None
-                )
+                parent_config = _with_checkpoint_id(config, parent_id) if parent_id else None
                 yield CheckpointTuple(
                     config=cfg,
                     checkpoint=entry["checkpoint"],
@@ -152,18 +184,37 @@ class InMemoryFencedCheckpointer(BaseCheckpointSaver):
 
     # --- async API (used by the async graph runtime) ---
 
-    async def aput(self, config, checkpoint, metadata, new_versions):
+    async def aput(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
         await self._verify_gate(config)
         return self._put_sync(config, checkpoint, metadata, new_versions)
 
-    async def aput_writes(self, config, writes, task_id, task_path=""):
+    async def aput_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
         await self._verify_gate(config)
         self._put_writes_sync(config, writes, task_id, task_path)
 
-    async def aget_tuple(self, config):
+    async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         return self._get_tuple_sync(config)
 
-    async def alist(self, config, *, filter=None, before=None, limit=None) -> AsyncIterator[CheckpointTuple]:
+    async def alist(
+        self,
+        config: RunnableConfig | None,
+        *,
+        filter: dict[str, Any] | None = None,
+        before: RunnableConfig | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[CheckpointTuple]:
         for tup in self._list_sync(config, filter=filter, before=before, limit=limit):
             yield tup
 
@@ -174,19 +225,38 @@ class InMemoryFencedCheckpointer(BaseCheckpointSaver):
 
     # --- sync API (dev convenience; gate is not enforced on the sync path) ---
 
-    def put(self, config, checkpoint, metadata, new_versions):
+    def put(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
         return self._put_sync(config, checkpoint, metadata, new_versions)
 
-    def put_writes(self, config, writes, task_id, task_path=""):
+    def put_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
         self._put_writes_sync(config, writes, task_id, task_path)
 
-    def get_tuple(self, config):
+    def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         return self._get_tuple_sync(config)
 
-    def list(self, config, *, filter=None, before=None, limit=None) -> Iterator[CheckpointTuple]:
+    def list(
+        self,
+        config: RunnableConfig | None,
+        *,
+        filter: dict[str, Any] | None = None,
+        before: RunnableConfig | None = None,
+        limit: int | None = None,
+    ) -> Iterator[CheckpointTuple]:
         yield from self._list_sync(config, filter=filter, before=before, limit=limit)
 
-    def get(self, config):
+    def get(self, config: RunnableConfig) -> Checkpoint | None:
         tup = self._get_tuple_sync(config)
         return tup.checkpoint if tup else None
 

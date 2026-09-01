@@ -62,6 +62,7 @@ class ServerRuntime:
             ("observability", self.observability),
         ):
             components[name] = await _health_status(component)
+        tool_health: dict[str, HealthStatus]
         try:
             tool_health = await self.tool_manager.health()
         except Exception:

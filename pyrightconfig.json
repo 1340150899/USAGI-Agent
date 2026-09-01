@@ -1,0 +1,12 @@
+{
+  "include": [
+    "usagi-agent/src",
+    "usagi-agent/configs",
+    "usagi-agent/tests",
+    "examples"
+  ],
+  "extraPaths": [
+    "usagi-agent/src",
+    "usagi-agent"
+  ]
+}

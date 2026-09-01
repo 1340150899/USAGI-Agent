@@ -1,10 +1,17 @@
 """Run with: python -m examples.structured_agent.run"""
 import asyncio
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2] / "usagi-agent"
+for path in (PROJECT_ROOT / "src", PROJECT_ROOT):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from pydantic import BaseModel
 
 from examples.structured_agent.agent import RESEARCH_WRITER_AGENT
-from examples.structured_agent.configs import SCENARIO_CONFIGS
+from configs import SCENARIO_CONFIGS
 from examples.structured_agent.model_adapter import ScriptedModelAdapter
 from examples.structured_agent.tools import SearchToolAdapter
 from usagi_agent.pipelines import ScenarioPipelineInitializer

@@ -13,7 +13,7 @@
 
 ```
 USAGI-Agent/
-├─ packages/usagi-agent/        # 业务无关通用框架（Kernel + Capabilities + Ports）
+├─ usagi-agent/                 # 业务无关通用框架（Kernel + Capabilities + Ports）
 │  ├─ src/usagi_agent/
 │  │  ├─ types/                 # §4.1/§8.1 共享类型（跨模块唯一允许的类型共享面）
 │  │  ├─ ports/                 # 稳定 Port 表面（基础设施 + 能力 Protocol）
@@ -29,7 +29,7 @@ USAGI-Agent/
 │  └─ tests/                    # contract + pipeline 测试
 ├─ plugins/                     # 可替换插件（§26，首版不实现 manifest 加载）
 ├─ apps/xhs-autopost/           # 首个业务应用（仅骨架）
-└─ examples/structured-agent/   # 业务无关端到端示例：research_writer
+└─ examples/structured_agent/   # 业务无关端到端示例：research_writer
 ```
 
 ## 架构硬约束（贯穿全库）
@@ -64,11 +64,11 @@ Server(runtime, ...)                     # 持 runtime 暴露 start/resume/cance
 ## 安装与运行
 
 ```bash
-pip install -e packages/usagi-agent
+pip install -e usagi-agent
 # 端到端示例（InMemory 后端，两轮：Tool → next_pass → Final → run_completed）
-python examples/structured-agent/run.py
+python -m examples.structured_agent.run
 # 测试（State 契约 / Bundle 校验 / FencedCheckpointer gate / ThreadControlBinding 唯一 / 六 Rule 流程 / 幂等）
-pytest packages/usagi-agent/tests
+pytest usagi-agent/tests
 ```
 
 ## 范围说明（v1）

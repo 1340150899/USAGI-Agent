@@ -9,7 +9,7 @@
 
 分层原则：
 
-- `packages/usagi-agent` 是与业务无关、可独立发布和测试的通用框架。
+- `usagi-agent` 是与业务无关、可独立发布和测试的通用框架。
 - `apps/xhs-autopost` 是框架的第一个业务应用，定义工作流、业务 Agent、规则和 UI。
 - `plugins/wxauto`、`plugins/social-auto-upload` 是可替换插件，框架核心不引用它们。
 - 小红书需求用于验证框架抽象是否实用，但任何业务概念都不能反向渗透进框架 Kernel。
