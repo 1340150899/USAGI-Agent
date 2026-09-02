@@ -1,8 +1,33 @@
 # Python bytecode and cache directories
 __pycache__/
-*.pyc
+*.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 *.egg-info/
+build/
+dist/
 
-# Local tool configuration
+# Virtual environments and local environment variables
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+!.env.template
+
+# IDE and local tool configuration
 .claude/settings.local.json
+.vscode/
+.idea/
+
+# Local runtime files
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
