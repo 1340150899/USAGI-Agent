@@ -49,10 +49,10 @@ USAGI-Agent/
 **只构造/校验/编译，不含 Run 期执行**：
 
 ```
-ApplicationContainer.init(settings, scenarios, model_adapter)
+ApplicationContainer.init(settings, scenarios)
  ├─ ObservabilityInitializer.init        → OTel Provider              # §25
  ├─ PersistenceInitializer.init          → InfrastructurePorts (全部 Store)  # §24
- ├─ CapabilityInitializer.init           → 共享 ModelAdapter/Memory/Tool/Policy  # §11.5
+ ├─ CapabilityInitializer.init           → AgentManager 内置 live/scripted 模型执行、Memory/Tool/Policy  # §11.5
  ├─ KernelInitializer.init               → Budget/Cancellation/Middleware 执行件壳  # §10
  ├─ CatalogBuilder.build                 → 每 scenario: 六 Rule 装配 + LangGraph 编译 → RuntimeBundle  # §7.1
  ├─ health_check                         → 任一必需 Bundle 不全 → 启动失败  # §7.1 step8

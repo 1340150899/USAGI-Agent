@@ -1,0 +1,81 @@
+from decimal import Decimal
+
+import pytest
+from pydantic import ValidationError
+
+from usagi_agent.agents import AgentManager, AgentManagerInitializer, AgentSpec
+from usagi_agent.kernel.context import RunContext
+from usagi_agent.models import GLM_5_2_MODEL, ModelSpec
+from usagi_agent.registry import BootstrapSettings
+from usagi_agent.types.model import ModelRequest
+from usagi_agent.types.refs import ArtifactRef, PrincipalRef
+
+
+def test_agent_spec_requires_an_explicit_model():
+    assert "prompt" not in AgentSpec.model_fields
+    with pytest.raises(ValidationError):
+        AgentSpec(  # pyright: ignore[reportCallIssue]
+            id="agent", input_schema="input", output_schema="output",
+        )
+
+
+def test_model_catalog_is_static_and_not_registered_in_agent_manager():
+    manager = AgentManagerInitializer.init(
+        BootstrapSettings(model_execution_mode="scripted"),
+    )
+    assert GLM_5_2_MODEL.provider_model == "glm-5.2"
+    assert GLM_5_2_MODEL.base_url == "https://open.bigmodel.cn/api/paas/v4/"
+    assert not hasattr(manager, "register_model")
+    assert not hasattr(manager, "get_model")
+
+
+@pytest.mark.asyncio
+async def test_agent_manager_owns_live_or_scripted_execution_switch(monkeypatch):
+    monkeypatch.delenv(GLM_5_2_MODEL.api_key_env, raising=False)
+    live = AgentManager(model_execution_mode="live")
+    scripted = AgentManager(model_execution_mode="scripted")
+    for manager, suffix in ((live, "live"), (scripted, "scripted")):
+        manager.create_agent(
+            id=f"agent-{suffix}",
+            input_schema="input",
+            output_schema="output",
+            model=GLM_5_2_MODEL,
+        )
+    assert await live.health() == "degraded"
+    assert await scripted.health() == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_agents_hold_models_and_manager_routes_and_accounts_by_agent():
+    manager = AgentManager(model_execution_mode="scripted")
+    models = (
+        ModelSpec(
+            id="m1", provider_model="provider-m1", input_cost_per_million=Decimal("1"),
+            output_cost_per_million=Decimal("2"),
+        ),
+        ModelSpec(id="m2", provider_model="provider-m2"),
+    )
+    for agent_id, model in (("a1", models[0]), ("a2", models[1])):
+        manager.create_agent(
+            id=agent_id,
+            input_schema="input",
+            output_schema="output",
+            model=model,
+        )
+    context = RunContext(
+        run_id="run", thread_id="thread", tenant_id="tenant",
+        principal=PrincipalRef(principal_kind="user", principal_opaque_id="user"),
+        authorization_scope=(), deadline=None, fencing_token=1,
+    )
+    ref = ArtifactRef(artifact_id="context", content_type="application/json")
+    for agent_id in ("a1", "a2"):
+        await manager.generate(
+            agent_id=agent_id,
+            request=ModelRequest(
+                messages_ref=ref, context_pack_ref=ref, max_output_tokens=100
+            ),
+            context=context,
+        )
+
+    assert manager.get("a1").model is models[0]
+    assert manager.usage_for_agent("a1").cost == Decimal("0.00002")

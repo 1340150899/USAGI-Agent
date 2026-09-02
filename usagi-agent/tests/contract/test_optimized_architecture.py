@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 import pytest
 
-from examples.structured_agent.agent import RESEARCH_WRITER_AGENT
-from configs import SCENARIO_CONFIGS
-from examples.structured_agent.model_adapter import ScriptedModelAdapter
+from examples.structured_agent.agent import create_research_writer_agent
+from usagi_agent.pipelines.config.stage_config import SCENARIO_CONFIGS
 from examples.structured_agent.tools import SearchToolAdapter
 from usagi_agent.api.errors import UnknownToolError
 from usagi_agent.pipelines import ScenarioPipelineInitializer
@@ -13,6 +12,7 @@ from usagi_agent.registry import BootstrapSettings
 from usagi_agent.server import ServiceRuntimeInitializer
 from usagi_agent.tools import ToolAdapter, ToolSpec, to_model_tool
 from usagi_agent.ports import ToolContext
+from usagi_agent.prompts import RESEARCH_WRITER_PROMPT, prompt_for_agent
 
 
 class _FailingLifecycleTool(ToolAdapter):
@@ -51,7 +51,7 @@ def test_tool_spec_is_the_minimal_function_contract():
 
 def test_service_init_registers_only_builtins_and_does_not_compile_scenarios():
     runtime = ServiceRuntimeInitializer.init(
-        BootstrapSettings(), model_adapter=ScriptedModelAdapter()
+        BootstrapSettings(model_execution_mode="scripted")
     )
     assert set(spec.name for spec in runtime.tool_manager.all_specs()) == {
         "current_time", "calculator", "artifact_reader"
@@ -64,11 +64,11 @@ def test_service_init_registers_only_builtins_and_does_not_compile_scenarios():
 
 def test_pipeline_init_reuses_service_instances_and_scenario_has_no_tools():
     runtime = ServiceRuntimeInitializer.init(
-        BootstrapSettings(), model_adapter=ScriptedModelAdapter()
+        BootstrapSettings(model_execution_mode="scripted")
     )
     persistence = runtime.persistence
     runtime.tool_manager.register(SearchToolAdapter())
-    runtime.agent_manager.register(RESEARCH_WRITER_AGENT)
+    create_research_writer_agent(runtime.agent_manager)
     ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
     scenario = runtime.scenario_registry.get("example.research_writer")
     assert runtime.persistence is persistence
@@ -76,7 +76,8 @@ def test_pipeline_init_reuses_service_instances_and_scenario_has_no_tools():
     stages = (
         scenario.config.pipeline.pre_recall,
         scenario.config.pipeline.recall,
-        scenario.config.pipeline.context_build,
+        scenario.config.pipeline.context_build.filters,
+        scenario.config.pipeline.context_build.rankers,
         scenario.config.pipeline.model,
         scenario.config.pipeline.result_process,
         scenario.config.pipeline.end,
@@ -88,20 +89,33 @@ def test_pipeline_init_reuses_service_instances_and_scenario_has_no_tools():
     asyncio.run(runtime.shutdown())
 
 
-def test_agent_manager_owns_and_renders_prompts():
+def test_scenario_uses_only_framework_owned_stage_rules():
+    for stage in (
+        SCENARIO_CONFIGS[0].pipeline.pre_recall,
+        SCENARIO_CONFIGS[0].pipeline.recall,
+        SCENARIO_CONFIGS[0].pipeline.context_build.filters,
+        SCENARIO_CONFIGS[0].pipeline.context_build.rankers,
+        SCENARIO_CONFIGS[0].pipeline.model,
+        SCENARIO_CONFIGS[0].pipeline.result_process,
+        SCENARIO_CONFIGS[0].pipeline.end,
+    ):
+        assert all(type(rule).__module__.startswith("usagi_agent.pipelines.rules") for rule in stage)
+
+
+def test_prompt_is_resolved_from_static_catalog_not_agent_or_manager_state():
     runtime = ServiceRuntimeInitializer.init(
-        BootstrapSettings(), model_adapter=ScriptedModelAdapter()
+        BootstrapSettings(model_execution_mode="scripted")
     )
-    runtime.agent_manager.register(RESEARCH_WRITER_AGENT)
-    prompt_ref, template = runtime.agent_manager.get_prompt("research_writer")
-    assert prompt_ref == RESEARCH_WRITER_AGENT.prompt
-    assert runtime.agent_manager.render_prompt("research_writer") == template
+    registered = create_research_writer_agent(runtime.agent_manager)
+    assert "prompt" not in type(registered).model_fields
+    assert prompt_for_agent(registered.id) is RESEARCH_WRITER_PROMPT
+    assert not hasattr(runtime.agent_manager, "render_prompt")
     asyncio.run(runtime.shutdown())
 
 
 def test_health_reports_every_persistence_resource_and_isolates_failures():
     runtime = ServiceRuntimeInitializer.init(
-        BootstrapSettings(), model_adapter=ScriptedModelAdapter()
+        BootstrapSettings(model_execution_mode="scripted")
     )
     runtime.tool_manager.register(_FailingLifecycleTool())
     runtime.persistence.event_bus = _HealthFailureProbe()
@@ -121,7 +135,7 @@ def test_health_reports_every_persistence_resource_and_isolates_failures():
 
 def test_shutdown_continues_after_an_earlier_resource_fails():
     runtime = ServiceRuntimeInitializer.init(
-        BootstrapSettings(), model_adapter=ScriptedModelAdapter()
+        BootstrapSettings(model_execution_mode="scripted")
     )
     runtime.tool_manager.register(_FailingLifecycleTool())
     probe = _CloseProbe()

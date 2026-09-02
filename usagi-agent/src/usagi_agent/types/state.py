@@ -17,6 +17,7 @@ from usagi_agent.types.refs import (
     ContextPackRef,
     FinalOutputRef,
     ModelResponseRef,
+    ModelRequestRef,
     PassResultRef,
     ToolObservationRef,
 )
@@ -69,6 +70,7 @@ class AgentPassState(TypedDict, total=False):
     recall_plan_ref: ArtifactRef
     recall_bundle_ref: ArtifactRef
     context_pack_ref: ContextPackRef
+    model_request_ref: ModelRequestRef
     model_response_ref: ModelResponseRef
     action_type: Literal["final", "tool", "delegate", "need_input", "failure"]
     action_hash: str

@@ -1,7 +1,7 @@
 from pydantic import BaseModel, ConfigDict, Field
 
+from usagi_agent.pipelines.config.context_build import ContextBuildPipelineConfig
 from usagi_agent.pipelines.rules import (
-    ContextBuildAdapterConfig,
     EndAdapterConfig,
     ModelRuleAdapterConfig,
     PreRecallAdapterConfig,
@@ -16,7 +16,9 @@ class AgentPipelineConfig(BaseModel):
 
     pre_recall: tuple[PreRecallAdapterConfig, ...] = ()
     recall: tuple[RecallAdapterConfig, ...] = ()
-    context_build: tuple[ContextBuildAdapterConfig, ...] = ()
+    context_build: ContextBuildPipelineConfig = Field(
+        default_factory=ContextBuildPipelineConfig
+    )
     model: tuple[ModelRuleAdapterConfig, ...] = ()
     result_process: tuple[ResultProcessAdapterConfig, ...] = ()
     end: tuple[EndAdapterConfig, ...] = ()

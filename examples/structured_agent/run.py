@@ -10,9 +10,8 @@ for path in (PROJECT_ROOT / "src", PROJECT_ROOT):
 
 from pydantic import BaseModel
 
-from examples.structured_agent.agent import RESEARCH_WRITER_AGENT
-from configs import SCENARIO_CONFIGS
-from examples.structured_agent.model_adapter import ScriptedModelAdapter
+from examples.structured_agent.agent import create_research_writer_agent
+from usagi_agent.pipelines.config.stage_config import SCENARIO_CONFIGS
 from examples.structured_agent.tools import SearchToolAdapter
 from usagi_agent.pipelines import ScenarioPipelineInitializer
 from usagi_agent.registry.bootstrap import BootstrapSettings
@@ -24,12 +23,14 @@ class ResearchRequest(BaseModel):
     query: str
 
 
-def build_server(model_adapter: ScriptedModelAdapter | None = None) -> Server:
+def build_server(*, use_scripted_model: bool = True) -> Server:
     runtime = ServiceRuntimeInitializer.init(
-        BootstrapSettings(), model_adapter=model_adapter or ScriptedModelAdapter()
+        BootstrapSettings(
+            model_execution_mode="scripted" if use_scripted_model else "live"
+        )
     )
     runtime.tool_manager.register(SearchToolAdapter())
-    runtime.agent_manager.register(RESEARCH_WRITER_AGENT)
+    create_research_writer_agent(runtime.agent_manager)
     ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
     return Server(runtime)
 

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel, ConfigDict
 from usagi_agent.kernel.context import RunContext
 from usagi_agent.pipelines.rules.stage_type import StageType
-from usagi_agent.pipelines.stage import EndRuleInput, EndRuleOutput, RuleExecutionError
+from usagi_agent.pipelines.rules.stage import EndRuleInput, EndRuleOutput, RuleExecutionError
 if TYPE_CHECKING:
     from usagi_agent.server.runtime import ServerRuntime
 

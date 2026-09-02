@@ -1,7 +1,7 @@
 """Construct service resources without loading any business scenario."""
 from __future__ import annotations
 
-from usagi_agent.agents import AgentManager
+from usagi_agent.agents import AgentManagerInitializer
 from usagi_agent.erasure import ErasureInitializer
 from usagi_agent.kernel import KernelInitializer
 from usagi_agent.memory.manager import DefaultMemoryManager
@@ -17,7 +17,7 @@ from usagi_agent.tools.builtin import builtin_tools
 
 class ServiceRuntimeInitializer:
     @staticmethod
-    def init(settings, *, model_adapter) -> ServerRuntime:
+    def init(settings) -> ServerRuntime:
         if settings.persistence_backend == "sqlite":
             settings.require_durable()
         observability = ObservabilityInitializer.init(settings)
@@ -26,18 +26,20 @@ class ServiceRuntimeInitializer:
         tool_manager.register_many(
             builtin_tools(persistence.artifact_manager, persistence.artifact_metadata_store)
         )
-        memory_manager = DefaultMemoryManager()
+        memory_manager = DefaultMemoryManager(path=settings.memory_path)
         policy_engine = DefaultPolicyEngine()
         guardrail = DefaultGuardrail()
         kernel_components = KernelInitializer.init(persistence, observability)
         erasure = ErasureInitializer.init(
             persistence, observability, tenant_id=settings.tenant_id
         )
+        agent_manager = AgentManagerInitializer.init(settings)
+        
         return ServerRuntime(
             settings=settings,
             observability=observability,
             persistence=persistence,
-            agent_manager=AgentManager(model_adapter),
+            agent_manager=agent_manager,
             tool_manager=tool_manager,
             memory_manager=memory_manager,
             policy_engine=policy_engine,

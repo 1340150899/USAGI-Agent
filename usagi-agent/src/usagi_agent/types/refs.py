@@ -44,6 +44,7 @@ ToolObservationRef = ArtifactRef
 FinalOutputRef = ArtifactRef
 PassResultRef = ArtifactRef
 ModelResponseRef = ArtifactRef
+ModelRequestRef = ArtifactRef
 ExecutionContextSnapshotRef = ArtifactRef
 
 
@@ -103,4 +104,3 @@ class ThreadControlBinding(BaseModel):
     control_kind: Literal["run", "erasure"]
     control_id: str
     graph_checksum: str
-

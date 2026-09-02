@@ -26,6 +26,8 @@ env/
 .idea/
 
 # Local runtime files
+.usagi/
+usagi-agent/.usagi/
 *.log
 *.tmp
 *.bak

@@ -6,7 +6,7 @@ Rule modules don't couple to each other.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -131,3 +131,15 @@ class ContextPack(BaseModel):
     delegated_results: list[ArtifactRef] = Field(default_factory=list)
     citations: dict[str, SourceReference] = Field(default_factory=dict)
     budget_usage: ContextBudgetUsage | None = None
+
+
+class ContextUpdate(BaseModel):
+    """Structured model-to-framework state update; answer stays separate."""
+
+    compacted: bool = False
+    summary: str | None = None
+    facts: dict[str, Any] | None = None
+    constraints: list[str] | None = None
+    goals: list[str] | None = None
+    open_tasks: list[str] | None = None
+    artifacts: list[str] | None = None

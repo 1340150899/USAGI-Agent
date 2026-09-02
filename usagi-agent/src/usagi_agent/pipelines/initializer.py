@@ -20,6 +20,10 @@ def _stage_source(adapter: object) -> str:
 
 class ScenarioPipelineInitializer:
     @staticmethod
+    def _context_build_adapters(config) -> tuple[object, ...]:
+        return (*config.filters, *config.rankers)
+
+    @staticmethod
     def init(runtime, scenarios: Iterable[ScenarioConfig]) -> tuple[ScenarioRuntime, ...]:
         scenario_list = tuple(scenarios)
         keys = [scenario.key for scenario in scenario_list]
@@ -42,7 +46,9 @@ class ScenarioPipelineInitializer:
             stages = (
                 scenario.pipeline.pre_recall,
                 scenario.pipeline.recall,
-                scenario.pipeline.context_build,
+                ScenarioPipelineInitializer._context_build_adapters(
+                    scenario.pipeline.context_build
+                ),
                 scenario.pipeline.model,
                 scenario.pipeline.result_process,
                 scenario.pipeline.end,
@@ -76,7 +82,8 @@ class ScenarioPipelineInitializer:
         stages = (
             (scenario.pipeline.pre_recall, StageType.PRE_RECALL),
             (scenario.pipeline.recall, StageType.RECALL),
-            (scenario.pipeline.context_build, StageType.CONTEXT_BUILD),
+            (scenario.pipeline.context_build.filters, StageType.CONTEXT_BUILD),
+            (scenario.pipeline.context_build.rankers, StageType.CONTEXT_BUILD),
             (scenario.pipeline.model, StageType.MODEL),
             (scenario.pipeline.result_process, StageType.RESULT_PROCESS),
             (scenario.pipeline.end, StageType.END),

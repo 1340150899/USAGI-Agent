@@ -10,7 +10,7 @@ from usagi_agent.types.refs import AdapterRef
 
 @runtime_checkable
 class ModelAdapter(Protocol):
-    """One shared adapter per Server (§18.3). Protocol-compat != data egress authorization."""
+    """Internal AgentManager model-execution strategy contract."""
 
     adapter_ref: AdapterRef
 

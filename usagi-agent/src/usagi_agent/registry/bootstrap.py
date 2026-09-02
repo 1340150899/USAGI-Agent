@@ -26,6 +26,13 @@ class BootstrapSettings(BaseModel):
         default=None, description="Path to a single shared SQLite DB (all Stores co-located)."
     )
     artifact_dir: str | None = Field(default=None, description="Encrypted artifact blob root.")
+    memory_path: str = Field(
+        default=".usagi/memory.json",
+        description="Local LangGraph BaseStore JSON path; replace with a DB store later.",
+    )
+
+    # --- Model execution: live is the production path; scripted is deterministic. ---
+    model_execution_mode: Literal["live", "scripted"] = "live"
 
     # --- Observability (§25) ---
     service_name: str = "usagi-agent"
@@ -34,12 +41,6 @@ class BootstrapSettings(BaseModel):
     deployment_environment: str = "dev"
     otel_endpoint: str | None = Field(
         default=None, description="OTLP endpoint. None -> console exporter."
-    )
-
-    # --- Shared model endpoint + credential (§18.3: one shared ModelAdapter) ---
-    model_endpoint: str | None = None
-    model_credential_ref: str | None = Field(
-        default=None, description="Opaque SecretRef id; resolved only at the execution boundary."
     )
 
     # --- Encryption / attestation (§24.4, §16) ---

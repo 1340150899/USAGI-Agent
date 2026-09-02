@@ -9,6 +9,10 @@ from usagi_agent.ports.context import HealthStatus, ToolContext
 from usagi_agent.types.context import RecallQuery
 from usagi_agent.types.policy import MemoryCandidate
 from usagi_agent.types.refs import MemoryRef
+from usagi_agent.memory.types import (
+    ContextPolicy, LongTermMemory, MemoryExtractionRequest, PreparedContext,
+    RawEvent, SessionContext,
+)
 
 
 class MemoryRecallResult(BaseModel):
@@ -25,7 +29,30 @@ class MemoryMutationResult(BaseModel):
 
 @runtime_checkable
 class MemoryManager(Protocol):
+    async def append_event(
+        self, *, session_id: str, role: str, content: str, ctx: ToolContext,
+        metadata: dict[str, object] | None = None,
+    ) -> RawEvent: ...
+
+    async def get_session_context(
+        self, session_id: str, ctx: ToolContext,
+    ) -> SessionContext: ...
+
+    async def prepare_context(
+        self, session_id: str, ctx: ToolContext, policy: ContextPolicy,
+    ) -> PreparedContext: ...
+
+    async def apply_context_update(
+        self, session_id: str, ctx: ToolContext, **updates: object,
+    ) -> SessionContext: ...
+
     async def recall(self, query: RecallQuery, ctx: ToolContext) -> MemoryRecallResult: ...
+
+    async def extract(
+        self, request: MemoryExtractionRequest, ctx: ToolContext,
+    ) -> list[LongTermMemory]: ...
+
+    async def put(self, memory: LongTermMemory, ctx: ToolContext) -> LongTermMemory: ...
 
     async def propose(
         self, candidate: MemoryCandidate, ctx: ToolContext,

@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict
 
 from usagi_agent.kernel.context import RunContext
 from usagi_agent.pipelines.rules.stage_type import StageType
-from usagi_agent.pipelines.stage import (
+from usagi_agent.pipelines.rules.stage import (
     PreRecallRuleInput,
     PreRecallRuleOutput,
     RuleExecutionError,

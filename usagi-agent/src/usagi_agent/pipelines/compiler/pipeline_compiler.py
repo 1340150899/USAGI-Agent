@@ -71,7 +71,7 @@ class PipelineCompiler:
         checkpointer=None,
     ) -> Any:
         pipeline = scenario.pipeline
-        processor = PipelineProcessor(pipeline, runtime)
+        processor = PipelineProcessor(scenario, runtime)
         stages: tuple[tuple[str, StageProcess], ...] = (
             ("pre_recall", processor.process_pre_recall),
             ("recall", processor.process_recall),

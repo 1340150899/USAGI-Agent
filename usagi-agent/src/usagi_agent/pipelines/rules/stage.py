@@ -42,20 +42,9 @@ class RecallRuleOutput(_StageData):
     recall_bundle_ref: str | None = None
 
 
-class ContextBuildRuleInput(_StageData):
-    normalized_input_ref: str = ""
-    recall_cache: dict[str, str] = Field(default_factory=dict)
-    recall_bundle_ref: str = ""
-    tool_observation_refs: tuple[str, ...] = ()
-    context_pack_ref: str = ""
-
-
-class ContextBuildRuleOutput(_StageData):
-    context_pack_ref: str
-
-
 class ModelRuleInput(_StageData):
     context_pack_ref: str = ""
+    model_request_ref: str = ""
     iteration: int = 0
     model_response_ref: str = ""
 

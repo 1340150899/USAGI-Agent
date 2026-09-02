@@ -178,21 +178,21 @@ flowchart TB
 
 ### 4.1 Agent 标准定义
 
-每个 Agent 都是在 Python factory 中直接构造的类型化 AgentSpec，而不是 YAML 配置或散落的 prompt。第一版由 Server Bootstrap 装入 RuntimeBundleCatalog：
+每个 Agent 都由 AgentManager 根据代码中的类型化参数创建，不通过 YAML 配置，也不携带 prompt。第一版由 Server Bootstrap 装入 RuntimeBundleCatalog：
 
 ```python
-post_writer = AgentSpec(
+post_writer = agent_manager.create_agent(
     id="post_writer",
     input_schema=PostWriterInput,
     output_schema=PostDraft,
-    prompt=POST_WRITER_PROMPT,
+    model=GLM_5_2_MODEL,
     allowed_tools=(MEDIA_DESCRIBE,),
 )
 ```
 
-第一版所有 Agent 共享同一个 ModelAdapter 和六 Rule AgentLoop，不配置 per-Agent model、timeout、token、fallback 或 MemoryPolicy profile。确需差异时直接实现明确的业务 Agent/Adapter，不能先增加通用配置开关。
+ModelSpec 与 PromptSpec 分别在 `models/`、`prompts/` 中静态声明。AgentSpec 只持有 ModelSpec；Prompt 不进入 AgentSpec 或 AgentManager，由 Context Build 按 Agent ID 从 Prompt Catalog 解析。AgentManager 通过 live/scripted 开关在内部选择真实 OpenAI-compatible 调用或 ScriptedModelAdapter，并按 Agent 汇总 usage。Context Build Stage 生成完整 ModelRequest，Model Stage 直接交给 AgentManager 执行。
 
-所有业务 Agent 统一装配到六个标准 Rule：`PreRecallRule → RecallSourcesRule → ContextBuildRule → ModelRule → ResultProcessRule → EndRule`。其中 RecallSourcesRule 与 ContextBuildRule 可在产品视角合并称为“召回与 Context 构建”。业务只提供 AgentSpec、Module/Stage Adapter 和 Policy，不自行实现 Agent 循环。
+所有业务 Agent 统一装配到六个标准 Rule：`PreRecallRule → RecallSourcesRule → ContextBuildRule → ModelRule → ResultProcessRule → EndRule`。其中 RecallSourcesRule 与 ContextBuildRule 可在产品视角合并称为“召回与 Context 构建”。业务只提供 Agent 创建参数、Module/Stage Adapter 和 Policy，不自行构造 AgentSpec 或实现 Agent 循环。
 
 ### 4.2 Agent 划分
 
@@ -282,7 +282,7 @@ class MemoryAdapter(Protocol):
 - `WxAutoMessageAdapter`：只负责将 wxauto 事件转成统一消息事件。
 - `ManualInputAdapter`：用于测试和人工补录，绕过桌面自动化。
 - `XhsSauPublisherAdapter`：仅封装 `sau xiaohongshu check/upload-note`；当前没有可靠 delete/unpublish API。
-- `OpenAICompatibleModelAdapter`：只通过模型网关调用已登记 DataEgressPolicy 的兼容 endpoint；协议兼容不等于允许发送原始聊天。
+- OpenAI-compatible 固定调用流程位于 `AgentManager`；`ModelAdapter` 是其内部执行策略接口，scripted 模式由 Manager 自行创建测试实现，上层不能注入。协议兼容不等于允许发送原始聊天。
 - `PostgresMemoryAdapter`：结构化记忆和 pgvector 检索。
 
 这些 Adapter 都由框架 Node 注入和调用。特别是 PublisherAdapter 只能由 Fixed Workflow ToolNode 的标准治理节点链调用，业务 service 不得直接执行 `publish()`。
@@ -747,8 +747,6 @@ Phase 3 不属于第一版运行配置切换；需要修改实现、完成评测
 ```yaml
 monitored_contact_ref: null          # 必填：Bootstrap 注册得到的 opaque BusinessIdentityRef
 review_route_ref: null               # 必填：已验证的 opaque notification route Ref
-model_endpoint: null                 # 必填：已登记 DataEgressPolicy 的 OpenAI-compatible endpoint
-model_credential_ref: null           # 必填：SecretRef
 encryption_kek_ref: null             # 必填：仅用于 wrap per-scope DEK 的 KEK SecretRef
 xhs_account_ref: null                # live 发布前填写的 opaque account Ref
 xhs_credential_ref: null             # live 发布前填写

@@ -53,13 +53,13 @@ USAGI 的目标不是替代 LangGraph，而是在 LangGraph 之上建立一套�
 
 第一版采用静态、启动期初始化模型，优先完成可运行闭环，不建设“可配置一切”的系统：
 
-- Agent、AgentLoop、Pipeline、Rule、Tool 和 Adapter 由少量 Python factory 直接构造；第一版只使用一个 ModelAdapter、一个 MemoryManager 和一套固定 Guardrail。
+- Agent、AgentLoop、Pipeline、Rule 和 Tool 由少量 Python factory 构造；ModelSpec 与 PromptSpec 在各自 catalog 中静态声明。AgentManager 创建和管理 AgentSpec，AgentSpec 只持有所用 ModelSpec；Context Build 根据 Agent ID 解析 PromptSpec。Server 仍只使用一个 MemoryManager 和一套固定 Guardrail。
 - Server Bootstrap 时加载、校验、初始化并编译全部业务场景，按 `scenario_key` 存入只读 `RuntimeBundleCatalog`。
 - 每次 Run 只按 key 获取已就绪 Bundle、绑定运行数据、创建 State 并执行，不重新解析 Spec、创建 Adapter 或编译 LangGraph。
 - 配置变化必须重启 Server；第一版不支持热更新、动态注册、多租户覆盖、按 Run 灰度或在线 State migration。
 - 只保留程序无法推导的启动参数，例如联系人、账号、SecretRef 和外部服务地址。
 - 其余行为直接按本期已确认需求实现，不再抽象成“代码内默认配置”、PolicySpec 参数表或可调阈值集合。
-- 第一版不支持配置继承、环境覆盖链、tenant/user override、feature flag、在线调参和按场景组合任意 Rule。
+- 第一版不支持配置继承、环境覆盖链、tenant/user override、feature flag 和在线调参；场景只能选择 framework-owned stage rules，不能删除 stage process 中的强制逻辑。
 - 后续可以在不改变 RuntimeBundle/Spec 接口的前提下，把静态 Catalog 演进成动态 Registry，但不提前实现。
 - **多租户**：第一版以单租户部署（`tenant_id="default"`）验证，但 §10.6 的 ThreadControlBinding、tenant 参与根表唯一键/外键等隔离设计保留并随 v1 一起实现（单租户下退化为基础约束），以保证 FencedCheckpointer 等 v1 机制可工作。真正的跨租户并发验收场景不在首版覆盖；fencing/lease 因防崩溃恢复后 stale worker 写 checkpoint，单租户也保留。
 - **Erasure**：属首个正式版本，完整机制（独立 ErasureWorkflow / ErasureControlStore / KeyDestructionStore / 分布式对账 / DerivationScopeSet）按 §24.5 在 M2 交付并进入 §32 验收。注意这构成真实监听的关键路径长杆（§30.6 A1 依赖 M2）；若后续版本需提前解锁真实监听，可作为独立版本决策引入分阶段 Gate，但首版不拆分，按完整机制验收以避免下游悬空引用。
@@ -382,6 +382,11 @@ Kernel 不能依赖具体模型 SDK、数据库驱动或业务插件。应用不
 
 ## 6. 六 Rule Agent Pipeline
 
+> 当前实现边界：Stage Process 保留每个阶段不可替代的编排和强制逻辑；同一
+> Stage 内可重复、可排序、可组合的处理单元才抽象为 framework-owned Rule。
+> Scenario 只选择 Rule，不实现框架通用流程。Memory Rule/Stage 只调用
+> MemoryManager，召回、压缩、提取、冲突处理和持久化算法均位于 memory 模块。
+
 AgentPass 由六个标准 Rule 顺序组成；其中 RecallSourcesRule 与 ContextBuildRule 在用户视角共同构成“召回与 Context 构建”，因此仍可归纳为五个业务阶段：
 
 ```text
@@ -445,7 +450,7 @@ Tool 执行完成后生成 `ToolObservation` 和 `PassResult(next_pass)`；下�
 ```text
 1. ApplicationContainer 初始化 OpenTelemetry、Store、Model Client 和共享连接池
 2. 加载代码中静态声明的业务场景
-3. 为每个 scenario_key 构建 AgentSpec、AgentLoopSpec、PipelineSpec 和 ToolCatalog，并引用共享 ModelAdapter/MemoryManager
+3. AgentManagerInitializer 根据 live/scripted 开关初始化 AgentManager；业务调用 AgentManager.create_agent 创建 AgentSpec，并为每个 scenario_key 构建 AgentLoopSpec、PipelineSpec 和 ToolCatalog
 4. 校验 Schema、依赖、权限、Rule 顺序和强制节点
 5. 创建并注入 Adapter
 6. 编译全部 LangGraph Workflow/AgentLoop subgraph
@@ -465,7 +470,7 @@ Tool 执行完成后生成 `ToolObservation` 和 `PassResult(next_pass)`；下�
 6. PreRecallRule 归一化输入并生成 RecallPlan
 7. RecallSourcesRule 并行召回 Memory、Knowledge 和 ToolSpec
 8. ContextBuildRule 过滤、去重、重排、分配预算，归档 ContextPack 并把 ContextPackRef 写入 State
-9. ModelRule 渲染 Prompt，并通过共享 ModelAdapter 调用启动期固定模型
+9. Context Build Stage 根据 AgentSpec 持有的静态 ModelSpec，并按 Agent ID 从 Prompt Catalog 解析 PromptSpec，构造完整 ModelRequest；Model Stage 只把该请求交给 AgentManager 调用并统计 Agent usage
 10. ResultProcessRule 将响应解析并归档为 AgentAction，State 只保存 action type/hash/ref
 11. EndRule 根据 Action 分支
 12. 若为 ToolAction：Policy → Approval → Idempotency → Execute
@@ -1557,7 +1562,7 @@ class RuntimeBundle:
     workflow_spec: WorkflowSpec | None = None
     agent_loop_spec: AgentLoopSpec | None = None
     pipeline_spec: AgentPassPipelineSpec | None = None
-    model_adapter: ModelAdapter | None = None
+    model_execution_mode: Literal["live", "scripted"]
     tool_catalog: ToolCatalog
     memory_manager: MemoryManager | None
     compiled_graph: CompiledGraph
@@ -1759,11 +1764,11 @@ class AgentSpec(BaseModel):
     id: str
     input_schema: SchemaRef
     output_schema: SchemaRef
-    prompt: PromptRef
+    model: ModelSpec
     allowed_tools: tuple[ToolRef, ...] = ()
 ```
 
-AgentLoop、ModelAdapter、MemoryManager、Guardrail 和硬预算由应用 Bootstrap factory 统一装配到 RuntimeBundle，不做 per-Agent 配置。版本使用 `application_version + bundle_checksum` 记录。description、per-Agent model、fallback agent、独立预算和独立 MemoryPolicy 等字段等出现真实需求后再增加。
+AgentSpec 必须通过 `AgentManager.create_agent()` 创建并登记，直接持有静态 ModelSpec，但不保存 Prompt。PromptSpec 由 Context Build 根据 Agent ID 从静态 Prompt Catalog 解析。AgentManager 根据启动期 `live/scripted` 开关自行创建模型执行实现，上层不构造或注入 ScriptedModelAdapter。版本使用 `application_version + bundle_checksum` 记录。
 
 ### 13.2 为什么 Agent 无状态
 
@@ -1803,7 +1808,7 @@ load RunStartRequest and pinned RuntimeBundle
 
 第一版装配规则：
 
-- 所有 Agent 使用同一个六 Rule AgentLoop 和共享 ModelAdapter。
+- 所有 Agent 使用同一个六 Rule AgentLoop；live 或 scripted 模型执行策略由 AgentManager 内部持有。
 - AgentSpec 只保留确有差异的 `allowed_tools`。
 - MemoryManager、Guardrail 和硬预算使用应用唯一实现，不提供 profile/key 选择。
 - 业务差异通过不同 Agent 实现或明确 Adapter 表达，不通过层层配置覆盖表达。
@@ -2067,7 +2072,7 @@ class ContextPack(BaseModel):
     budget_usage: ContextBudgetUsage
 ```
 
-ContextPack 只承载本轮模型需要的业务输入和证据，不承载最终 system prompt。`ContextBudget` 由 AgentManager 根据模型上下文窗口、Prompt 版本的 `PromptBudgetProfile` 和输出上限预先计算，至少预留 `system_prompt_tokens`、`tool_schema_tokens` 和 `max_output_tokens`。ModelRule 渲染 Prompt 后必须再次执行最终 token 校验，实际占用超过预留时拒绝调用并产生结构化预算错误，不能静默截断引用。
+ContextPack 只承载本轮模型需要的业务输入和证据。Context Build 根据模型窗口、PromptBudgetProfile 和输出上限完成预算、解析并渲染 Prompt、装配 tools/messages，归档完整 ModelRequest。Model Stage 不再补充或修改请求参数，只读取 ModelRequestRef 并交给 AgentManager。
 
 `ContextPack` 是加密 Artifact 的内容 Schema，不是 LangGraph State Schema。ContextBuildRule 持久化它并只把 `ContextPackRef` 合并回 AgentPassState；ModelRule 执行时按 Ref 加载，用完后不把正文写回 State Patch。
 
@@ -2154,7 +2159,7 @@ ModelInvocation 使用 10.8 的双状态契约：`execution_status` 为 `reserve
 
 ### 18.3 第一版模型选择
 
-第一版 Server Bootstrap 时创建一个共享 ModelAdapter，并由所有场景使用同一个模型；不实现 ModelRouter、preferred/fallback 列表、按成本路由、按区域路由或 per-Agent 模型配置。模型 endpoint 和 credential 是启动参数，具体 model name 由应用实现固定。出现模型不可用时按统一错误处理，不在第一版自动切换供应商。
+第一版通过启动期开关选择 `live` 或 `scripted`，AgentManager 在内部创建对应执行策略，上层不能创建并注入 ScriptedModelAdapter。每个 AgentSpec 直接持有静态 ModelSpec；不实现 ModelRouter、preferred/fallback 列表或运行时动态模型切换。出现模型不可用时按统一错误处理，不自动切换供应商。
 
 ### 18.4 Prompt 管理
 
@@ -2165,7 +2170,7 @@ prompt_id + template + variables_schema
 + expected_output_schema + checksum
 ```
 
-第一版 Run 保存 Prompt checksum、共享 ModelAdapter/实际模型标识、ContextPack tenant-scoped integrity HMAC 和原始响应 ArtifactRef，不记录不存在的 ModelPolicy profile。原始内容 SHA-256 不进入 RunMetadata。
+第一版 Run 保存 Prompt checksum、执行模式/实际模型标识、ContextPack tenant-scoped integrity HMAC 和原始响应 ArtifactRef，不记录不存在的 ModelPolicy profile。原始内容 SHA-256 不进入 RunMetadata。
 
 ### 18.5 Adapter 与错误
 
@@ -4142,7 +4147,7 @@ A1 preview 依赖 M0B；synthetic external integration 依赖 M0B+M1 及签名�
 - start_agent/start_workflow 必须携带 request key；RunStartRequestStore 以 tenant/key/fingerprint 耐久去重，并通过原子 input metadata + ExecutionContext + RunControl + RunMetadata + start-outbox 消除重复 Run 和未启动窗口。
 - Run 只按 scenario_key 查找不可变 RuntimeBundle，不解析 Spec、不创建 Adapter、不编译 Graph。
 - 启动参数只包含程序无法推导的必需值；其余本期行为直接实现，不建立外部或代码内可调配置模型。
-- 所有第一期 Agent 使用同一个已初始化 ModelAdapter；不验收动态模型切换。
+- AgentManager 内部根据固定开关使用 live 或 scripted 执行策略；不验收运行时动态模型切换。
 - 模型调用按 at-least-once 设计，ModelInvocationStore 分离 execution/adoption；ModelGateway 仅对 `settled_success + adopted` 返回可用引用，superseded generation 的晚到响应只结算成本并清理内容。
 - ModelGateway 在任何远程调用前强制执行数据分类/DataEgressPolicy；只有受控本地模型允许原文，远程 endpoint 未登记地域、留存、训练和脱敏许可时 fail closed。
 - 六个 Rule 使用框架唯一默认实现；首版业务扩展白名单只有 RecallSources 的 ChatRetriever、ContextBuild Select/Trim 的 MaterialSelector 和外部系统 Adapter。
