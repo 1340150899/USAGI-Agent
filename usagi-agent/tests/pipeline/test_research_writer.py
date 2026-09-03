@@ -13,6 +13,7 @@ from examples.structured_agent.tools import SearchToolAdapter
 from usagi_agent.api.errors import IdempotencyConflictError, PolicyDeniedError
 from usagi_agent.kernel import AuthContext
 from usagi_agent.pipelines import ScenarioPipelineInitializer
+from usagi_agent.pipelines.processors.context_build import ContextBuildProcessor
 from usagi_agent.registry import BootstrapSettings
 from usagi_agent.server import Server, ServiceRuntimeInitializer
 from usagi_agent.types.policy import PolicyDecision
@@ -59,6 +60,29 @@ async def test_two_pass_run_completes_with_tool_then_final():
     outcome = await server.get_run(handle.run_id)
     assert outcome.kind == "completed"
     assert outcome.result_ref.artifact_id
+    await server.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_force_compaction_option_reaches_pipeline_and_is_consumed(monkeypatch):
+    server = build_server()
+    observed_modes: list[str | None] = []
+    original = ContextBuildProcessor._compress_once
+
+    async def capture_mode(self, state, context):
+        observed_modes.append(state.get("context_compaction_mode"))
+        return await original(self, state, context)
+
+    monkeypatch.setattr(ContextBuildProcessor, "_compress_once", capture_mode)
+    request = _request("force-compaction-option")
+    request.options.context_compaction = "force"
+
+    handle = await server.start_agent(request)
+    outcome = await server.get_run(handle.run_id)
+
+    assert outcome.kind == "completed"
+    assert observed_modes[0] == "force"
+    assert all(mode == "auto" for mode in observed_modes[1:])
     await server.shutdown()
 
 

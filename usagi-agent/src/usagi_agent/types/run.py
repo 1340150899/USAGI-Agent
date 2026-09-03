@@ -44,6 +44,10 @@ class RunOptions(BaseModel):
     cancellation_reason_code: CancellationReasonCode | None = None
     delegation_ref: str | None = None
     trace_parent: str | None = Field(default=None, description="W3C traceparent, propagation only.")
+    context_compaction: Literal["auto", "force"] = Field(
+        default="auto",
+        description="Use threshold-based compaction or force one safe compaction attempt.",
+    )
 
 
 # --- RunOutcome variants (§10.5) ---

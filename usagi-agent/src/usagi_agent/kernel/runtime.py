@@ -91,6 +91,7 @@ def _client_fingerprint(tenant_id: str, namespace: str, request: RunStartRequest
             if request.options.absolute_deadline
             else None,
             "delegation_ref": request.options.delegation_ref,
+            "context_compaction": request.options.context_compaction,
         }
     )
     return hmac.new(_DEV_HMAC_KEY, payload.encode(), hashlib.sha256).hexdigest()
@@ -444,7 +445,11 @@ class KernelRuntime:
             }
         }
         # The AgentLoop expects an AgentLoopState with request_ref set.
-        input_state = {"request_ref": input_ref.artifact_id, "run_id": run_id}
+        input_state = {
+            "request_ref": input_ref.artifact_id,
+            "run_id": run_id,
+            "context_compaction_mode": request.options.context_compaction,
+        }
 
         try:
             result = await scenario.compiled_graph.ainvoke(input_state, config)

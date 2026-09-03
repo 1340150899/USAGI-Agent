@@ -30,6 +30,34 @@ class ScriptedModelAdapter:
         self, request: ModelRequest, ctx: ToolContext
     ) -> ModelResponse:
         run_id = ctx.execution.control_id
+        if request.prompt_ref == "usagi.context_compaction_prompt@1.0.0":
+            payload = json.loads(str(request.messages[-1].get("content", "{}")))
+            previous = payload.get("previous_context", {})
+            events = payload.get("events_to_compact", [])
+            event_count = len(events)
+            previous_summary = str(previous.get("summary", "")).strip()
+            summary = (
+                f"{previous_summary}\nCompacted {event_count} earlier events."
+                if previous_summary
+                else f"Compacted {event_count} earlier events."
+            )
+            return ModelResponse(
+                content_ref=ArtifactRef(
+                    artifact_id="unpersisted:scripted-compaction",
+                    content_type="text/plain",
+                ),
+                content="",
+                context_update=ContextUpdate(
+                    compacted=True,
+                    summary=summary,
+                    facts=previous.get("facts", {}),
+                    constraints=previous.get("constraints", []),
+                    goals=previous.get("goals", []),
+                    open_tasks=previous.get("open_tasks", []),
+                    artifacts=previous.get("artifacts", []),
+                ),
+                usage=ModelUsage(input_tokens=10, output_tokens=5),
+            )
         if request.tools and run_id not in self._tool_used_by_run:
             self._tool_used_by_run.add(run_id)
             function = request.tools[0].get("function", {})
@@ -118,6 +146,10 @@ class AgentManager:
     def all_agents(self) -> tuple[AgentSpec, ...]:
         return tuple(self._agents.values())
 
+    def set_model_adapter(self, adapter: ModelAdapter | None) -> None:
+        """Inject a model boundary implementation, including deterministic test mocks."""
+        self._model_adapter = adapter
+
     async def generate(
         self, *, agent_id: str, request: ModelRequest, context: RunContext
     ) -> ModelResponse:
@@ -170,14 +202,22 @@ class AgentManager:
             "temperature": request.temperature,
         }
         if request.tools:
-            kwargs.update(tools=request.tools, tool_choice="auto")
+            kwargs.update(
+                tools=request.tools,
+                tool_choice="auto",
+                parallel_tool_calls=False,
+            )
         if request.structured_output:
             kwargs["response_format"] = {"type": "json_object"}
-        completion = await self._client_for(spec).chat.completions.create(**kwargs)
+        # Provider-compatible endpoints accept a dynamic subset of Chat Completions
+        # parameters, so keep this boundary intentionally adapter-typed.
+        client: Any = self._client_for(spec)
+        completion = await client.chat.completions.create(**kwargs)
         choice = completion.choices[0]
         message = choice.message
         tool_calls: list[ToolAction] = []
-        for call in message.tool_calls or []:
+        # AgentLoop executes one action per pass, so retain exactly one model call.
+        for call in (message.tool_calls or [])[:1]:
             try:
                 arguments = json.loads(call.function.arguments)
             except json.JSONDecodeError:

@@ -30,15 +30,6 @@ def estimate_tokens(text: str) -> int:
     return max(1, (len(text.encode("utf-8")) + 2) // 3)
 
 
-def _fit_recent_text(text: str, token_budget: int) -> str:
-    """Bound fallback summaries while favoring the most recently compacted facts."""
-    if token_budget <= 0:
-        return ""
-    while text and estimate_tokens(text) > token_budget:
-        text = text[max(1, len(text) // 10) :]
-    return text
-
-
 class DefaultMemoryManager:
     """Owns raw events, session context, compaction, extraction and recall.
 
@@ -103,7 +94,7 @@ class DefaultMemoryManager:
     async def prepare_context(
         self, session_id: str, ctx: ToolContext, policy: ContextPolicy
     ) -> PreparedContext:
-        """Build the working set and perform mandatory pre-call compaction."""
+        """Build the working set and select a mandatory pre-call compaction range."""
         session = await self.get_session_context(session_id, ctx)
         all_events = await self.list_events(session_id, ctx)
         by_id = {event.event_id: event for event in all_events}
@@ -124,7 +115,10 @@ class DefaultMemoryManager:
             int(policy.context_window * policy.compression_threshold),
             max(1, policy.context_window - policy.reserved_output_tokens),
         )
-        if estimated <= threshold or len(recent) < 2:
+        if (
+            (not policy.force_compaction and estimated <= threshold)
+            or len(recent) < 2
+        ):
             return PreparedContext(session=session, recent_events=recent, estimated_tokens=estimated)
 
         kept: list[RawEvent] = []
@@ -136,26 +130,85 @@ class DefaultMemoryManager:
             kept.append(event)
             kept_tokens += size
         kept.reverse()
-        evicted = recent[: len(recent) - len(kept)]
-        if not evicted:
-            evicted, kept = recent[:-1], recent[-1:]
-
-        # Raw events are never deleted. V1's lossless labelled summary is replaceable by
-        # an LLM compactor without changing the pipeline contract.
-        addition = "\n".join(f"{event.role}: {event.content}" for event in evicted)
-        combined_summary = "\n".join(part for part in (session.summary, addition) if part)
-        summary_budget = max(1, threshold - structured_tokens - kept_tokens)
-        session.summary = _fit_recent_text(combined_summary, summary_budget)
-        session.recent_event_ids = [event.event_id for event in kept]
-        session.compacted_until = evicted[-1].event_id
-        await self._extract_events(evicted, self._memory_ns(ctx), MemoryExtractionTrigger.CONTEXT_COMPACTION)
-        session.extracted_until = evicted[-1].event_id
-        await self.save_session_context(session_id, session, ctx)
-        return PreparedContext(
-            session=session, recent_events=kept,
-            estimated_tokens=structured_tokens + estimate_tokens(session.summary) + kept_tokens,
-            compacted=True,
+        keep_from = len(recent) - len(kept)
+        # Never compact the active user turn. Tool calls/results after it need the
+        # original request to remain a valid and meaningful model conversation.
+        latest_user = next(
+            (
+                index
+                for index in range(len(recent) - 1, -1, -1)
+                if recent[index].role == "user"
+            ),
+            None,
         )
+        if policy.force_compaction:
+            # A forced request compacts every eligible older event, regardless of
+            # token usage. The active user turn remains available for the next pass.
+            keep_from = latest_user if latest_user is not None else len(recent) - 1
+        elif latest_user is not None:
+            keep_from = min(keep_from, latest_user)
+        evicted, kept = recent[:keep_from], recent[keep_from:]
+        # A tool result must remain paired with the assistant tool call required by
+        # Chat Completions-compatible APIs. Expand the recent boundary when needed.
+        if kept and kept[0].role == "tool":
+            tool_call_id = kept[0].metadata.get("tool_call_id")
+            for index in range(len(evicted) - 1, -1, -1):
+                candidate = evicted[index]
+                calls = candidate.metadata.get("tool_calls", [])
+                if (
+                    candidate.role == "assistant"
+                    and isinstance(calls, list)
+                    and any(
+                        isinstance(call, dict)
+                        and call.get("tool_call_id") == tool_call_id
+                        for call in calls
+                    )
+                ):
+                    kept = recent[index:]
+                    evicted = recent[:index]
+                    break
+
+        # ContextBuild sends this range to the model. ResultProcess applies the model's
+        # structured context update and only then advances the compaction checkpoint.
+        return PreparedContext(
+            session=session,
+            recent_events=kept,
+            events_to_compact=evicted,
+            estimated_tokens=estimated,
+        )
+
+    async def apply_compaction(
+        self,
+        session_id: str,
+        event_ids: list[str],
+        ctx: ToolContext,
+        **updates: object,
+    ) -> SessionContext:
+        """Persist an LLM compaction result and extract evicted raw events to memory."""
+        session = await self.get_session_context(session_id, ctx)
+        selected = set(event_ids)
+        events = [
+            event
+            for event in await self.list_events(session_id, ctx)
+            if event.event_id in selected
+        ]
+        for field in ("summary", "facts", "constraints", "goals", "open_tasks", "artifacts"):
+            if field in updates and updates[field] is not None:
+                setattr(session, field, updates[field])
+        session.recent_event_ids = [
+            event_id for event_id in session.recent_event_ids if event_id not in selected
+        ]
+        if events:
+            checkpoint = events[-1].event_id
+            session.compacted_until = checkpoint
+            await self._extract_events(
+                events,
+                self._memory_ns(ctx),
+                MemoryExtractionTrigger.CONTEXT_COMPACTION,
+            )
+            session.extracted_until = checkpoint
+        await self.save_session_context(session_id, session, ctx)
+        return session
 
     async def apply_context_update(
         self, session_id: str, ctx: ToolContext, **updates: object

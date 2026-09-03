@@ -39,10 +39,26 @@ async def test_compaction_keeps_raw_events_and_extracts_incrementally(tmp_path: 
         ),
     )
 
-    assert prepared.compacted
+    assert prepared.requires_compaction
+    assert not prepared.compacted
     assert len(await manager.list_events("session", ctx)) == 3
-    assert prepared.session.compacted_until == prepared.session.extracted_until
-    assert prepared.estimated_tokens <= 100
+    assert prepared.session.compacted_until is None
+    assert not (
+        await manager.recall(RecallQuery(query_id="before", text="alpha"), ctx)
+    ).hits
+
+    await manager.apply_compaction(
+        "session",
+        [event.event_id for event in prepared.events_to_compact],
+        ctx,
+        summary="Earlier messages discussed alpha and beta.",
+        facts={"topic": "letters"},
+    )
+
+    session = await manager.get_session_context("session", ctx)
+    assert session.compacted_until == session.extracted_until
+    assert session.summary == "Earlier messages discussed alpha and beta."
+    assert session.facts == {"topic": "letters"}
     recalled = await manager.recall(
         RecallQuery(query_id="q", text="alpha"), ctx
     )

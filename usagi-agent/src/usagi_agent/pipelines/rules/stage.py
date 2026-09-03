@@ -55,6 +55,8 @@ class ModelRuleOutput(_StageData):
 
 class ResultProcessRuleInput(_StageData):
     model_response_ref: str = ""
+    context_pack_ref: str = ""
+    context_operation: str = "normal"
     iteration: int = 0
     action_type: str = ""
     action_hash: str = ""

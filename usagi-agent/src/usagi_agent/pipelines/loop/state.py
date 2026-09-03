@@ -23,6 +23,8 @@ class AgentRunState(TypedDict, total=False):
     recall_bundle_ref: str
     context_pack_ref: str
     model_request_ref: str
+    context_operation: str
+    context_compaction_mode: str
     # Model + action
     model_response_ref: str
     action_type: str

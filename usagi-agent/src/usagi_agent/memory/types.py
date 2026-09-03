@@ -41,13 +41,19 @@ class ContextPolicy(BaseModel):
     compression_threshold: float = Field(default=0.8, gt=0, le=1)
     reserved_output_tokens: int = Field(default=4_096, ge=0)
     recent_message_tokens: int = Field(default=8_000, ge=1)
+    force_compaction: bool = False
 
 
 class PreparedContext(BaseModel):
     session: SessionContext
     recent_events: list[RawEvent] = Field(default_factory=list)
+    events_to_compact: list[RawEvent] = Field(default_factory=list)
     estimated_tokens: int = 0
     compacted: bool = False
+
+    @property
+    def requires_compaction(self) -> bool:
+        return bool(self.events_to_compact)
 
 
 class MemoryExtractionRequest(BaseModel):

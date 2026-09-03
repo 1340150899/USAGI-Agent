@@ -7,6 +7,8 @@ import pytest
 from examples.structured_agent.run import build_server
 from usagi_agent.api.errors import SafeError
 from usagi_agent.kernel.context import RunContext
+from usagi_agent.memory.manager import DefaultMemoryManager
+from usagi_agent.memory.store import JsonFileStore
 from usagi_agent.pipelines.config import AgentPipelineConfig
 from usagi_agent.pipelines.config import ContextBuildPipelineConfig
 from usagi_agent.pipelines.loop.state import AgentRunState
@@ -26,6 +28,7 @@ from usagi_agent.pipelines.rules import (
 from usagi_agent.server.runtime import ServerRuntime
 from usagi_agent.agents.spec import AgentSpec
 from usagi_agent.types.refs import PrincipalRef
+from usagi_agent.types.context import RecallQuery
 
 
 class _FirstPreRecallRule(PreRecallAdapterConfig):
@@ -224,4 +227,55 @@ async def test_context_is_compressed_once_and_only_model_stage_invokes_model(mon
     state.update(cast(AgentRunState, await processor.process_result(state, _context())))
     assert prepare_calls == 1
     assert generate_calls == 1
+    await server.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_llm_compaction_is_applied_then_restarts_the_pipeline(
+    tmp_path,
+):
+    server = build_server()
+    runtime = server.runtime
+    runtime.memory_manager = DefaultMemoryManager(
+        JsonFileStore(tmp_path / "memory.json")
+    )
+    scenario = runtime.scenario_registry.get("example.research_writer")
+    processor = PipelineProcessor(scenario.config, runtime)
+    context = _context()
+    tool_context = context.to_tool_context()
+    for value in ("alpha " * 20, "beta " * 20, "gamma " * 20):
+        await runtime.memory_manager.append_event(
+            session_id=context.thread_id,
+            role="user",
+            content=value,
+            ctx=tool_context,
+        )
+
+    state: AgentRunState = {"context_compaction_mode": "force"}
+    state.update(
+        cast(AgentRunState, await processor.process_context_build(state, context))
+    )
+    assert state.get("context_operation") == "compaction"
+    assert state.get("context_compaction_mode") == "auto"
+
+    state.update(cast(AgentRunState, await processor.process_model(state, context)))
+    state.update(cast(AgentRunState, await processor.process_result(state, context)))
+    assert state.get("action_type") == "compaction"
+
+    session = await runtime.memory_manager.get_session_context(
+        context.thread_id, tool_context
+    )
+    assert session.compacted_until == session.extracted_until
+    assert session.summary == "Compacted 2 earlier events."
+    recalled = await runtime.memory_manager.recall(
+        RecallQuery(query_id="q", text="alpha"), tool_context
+    )
+    assert recalled.hits
+
+    state.update(cast(AgentRunState, await processor.process_end(state, context)))
+    assert state.get("pass_disposition") == "next_pass"
+    state.update(
+        cast(AgentRunState, await processor.process_context_build(state, context))
+    )
+    assert state.get("context_operation") == "normal"
     await server.shutdown()

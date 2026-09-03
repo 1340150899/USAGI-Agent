@@ -86,6 +86,11 @@ class EndProcessor(StageProcessor):
 
     async def _default_end(self, input: EndRuleInput, context: RunContext) -> EndRuleOutput:
         iteration = input.iteration + 1
+        if input.action_type == "compaction":
+            return EndRuleOutput(
+                pass_disposition="next_pass",
+                iteration=iteration,
+            )
         if input.action_type == "tool":
             action = await get_model(
                 self.runtime.persistence.artifact_manager,

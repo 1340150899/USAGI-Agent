@@ -46,6 +46,11 @@ class MemoryManager(Protocol):
         self, session_id: str, ctx: ToolContext, **updates: object,
     ) -> SessionContext: ...
 
+    async def apply_compaction(
+        self, session_id: str, event_ids: list[str], ctx: ToolContext,
+        **updates: object,
+    ) -> SessionContext: ...
+
     async def recall(self, query: RecallQuery, ctx: ToolContext) -> MemoryRecallResult: ...
 
     async def extract(
