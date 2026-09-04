@@ -19,6 +19,7 @@ from usagi_agent.pipelines.artifacts import (
     get_model,
     put_bytes,
     put_model,
+    put_side_effect_receipt,
 )
 from usagi_agent.pipelines.loop.state import AgentRunState
 from usagi_agent.pipelines.processors.base import StageProcessor
@@ -27,7 +28,7 @@ from usagi_agent.pipelines.rules.stage import (
     ResultProcessRuleInput,
     ResultProcessRuleOutput,
     RuleExecutionError,
-    StatePatch,
+    ResultProcessStagePatch,
 )
 from usagi_agent.types.action import (
     FailureAction,
@@ -61,7 +62,9 @@ class ResultProcessProcessor(StageProcessor):
         self.rules = rules
         self.max_tool_calls = max_tool_calls
 
-    async def process(self, state: AgentRunState, context: RunContext) -> StatePatch:
+    async def process(
+        self, state: AgentRunState, context: RunContext
+    ) -> ResultProcessStagePatch:
         rule_input = ResultProcessRuleInput(
             model_response_ref=state.get("model_response_ref", ""),
             context_pack_ref=state.get("context_pack_ref", ""),
@@ -114,6 +117,17 @@ class ResultProcessProcessor(StageProcessor):
                     *result.reason_codes,
                 ]
                 stage_patch["reason_codes"] = list(dict.fromkeys(merged_codes))
+            if result.side_effect_receipt_refs:
+                merged_receipts = [
+                    *cast(
+                        "list[str]",
+                        stage_patch.get("side_effect_receipt_refs") or [],
+                    ),
+                    *result.side_effect_receipt_refs,
+                ]
+                stage_patch["side_effect_receipt_refs"] = list(
+                    dict.fromkeys(merged_receipts)
+                )
             if result.pass_disposition is not None:
                 stage_patch["pass_disposition"] = result.pass_disposition
                 break
@@ -123,7 +137,7 @@ class ResultProcessProcessor(StageProcessor):
 
     async def _form_action(
         self, input: ResultProcessRuleInput, context: RunContext
-    ) -> StatePatch:
+    ) -> ResultProcessStagePatch:
         """Formation: interpret the model response into persisted actions.
 
         Pure interpretation plus action-artifact persistence — the turn's
@@ -140,7 +154,9 @@ class ResultProcessProcessor(StageProcessor):
             response, input, context
         )
         tool_actions = self._form_tool_actions(response.tool_calls) if response else []
-        await self._record_model_turn(response, context_update, tool_actions, context)
+        receipt_refs = await self._record_model_turn(
+            response, context_update, tool_actions, input.iteration, context
+        )
         tool_action_refs: list[str] = []
         action: FailureAction | FinalAction | None = None
         if response is None:
@@ -189,6 +205,7 @@ class ResultProcessProcessor(StageProcessor):
                 "action_hash": hashlib.sha256(payload.encode()).hexdigest(),
                 "agent_action_ref": tool_action_refs[0],
                 "tool_action_refs": tool_action_refs,
+                "side_effect_receipt_refs": receipt_refs,
             }
         assert action is not None
         ref = await put_model(
@@ -203,6 +220,7 @@ class ResultProcessProcessor(StageProcessor):
             "action_hash": hashlib.sha256(action.model_dump_json().encode()).hexdigest(),
             "agent_action_ref": ref,
             "tool_action_refs": [],
+            "side_effect_receipt_refs": receipt_refs,
         }
 
     async def _record_model_turn(
@@ -210,42 +228,69 @@ class ResultProcessProcessor(StageProcessor):
         response: ModelResponse | None,
         context_update: ContextUpdate | None,
         tool_actions: list[ToolAction],
+        iteration: int,
         context: RunContext,
-    ) -> None:
+    ) -> list[str]:
         """Persist the model turn's thread-memory side effects.
 
         Compaction responses are excluded: their outcome is applied by
         CompactionApplyRule, not by generic turn recording.
         """
         if response is None or (not response.content and not tool_actions):
-            return
+            return []
+        receipt_refs: list[str] = []
         metadata: dict[str, object] = {"run_id": context.run_id}
         if tool_actions:
             metadata["tool_calls"] = [
                 call.model_dump(mode="json") for call in tool_actions
             ]
-        await self.runtime.memory_manager.append_event(
+        event_operation_id = f"memory:assistant-event:{context.run_id}:{iteration}"
+        event = await self.runtime.memory_manager.append_event(
             session_id=context.thread_id,
             role="assistant",
             content=response.content or "",
             ctx=context.to_tool_context(),
             metadata=metadata,
+            operation_id=event_operation_id,
+        )
+        receipt_refs.append(
+            await put_side_effect_receipt(
+                self.runtime.persistence.artifact_manager,
+                operation_id=event_operation_id,
+                effect_type="memory.append_event",
+                result_ref=event.event_id,
+                tenant_id=context.tenant_id,
+                scope_id=context.run_id,
+            )
         )
         if context_update is not None:
+            update_operation_id = f"memory:context-update:{context.run_id}:{iteration}"
             await self.runtime.memory_manager.apply_context_update(
                 context.thread_id,
                 context.to_tool_context(),
+                operation_id=update_operation_id,
                 **context_update.model_dump(
                     exclude_none=True, exclude={"compacted"}
                 ),
             )
+            receipt_refs.append(
+                await put_side_effect_receipt(
+                    self.runtime.persistence.artifact_manager,
+                    operation_id=update_operation_id,
+                    effect_type="memory.apply_context_update",
+                    result_ref=event.event_id,
+                    tenant_id=context.tenant_id,
+                    scope_id=context.run_id,
+                )
+            )
+        return receipt_refs
 
     async def _form_compaction(
         self,
         response: ModelResponse | None,
         input: ResultProcessRuleInput,
         context: RunContext,
-    ) -> StatePatch:
+    ) -> ResultProcessStagePatch:
         artifact_manager = self.runtime.persistence.artifact_manager
         envelope = await get_model(
             artifact_manager, input.context_pack_ref, ModelContextEnvelope

@@ -41,6 +41,7 @@ class ToolRuntime(Protocol):
         arguments: dict[str, object],
         context: ToolContext,
         tool_call_id: str = "",
+        operation_id: str | None = None,
     ) -> ToolObservation: ...
 
 

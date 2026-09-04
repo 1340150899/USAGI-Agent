@@ -4,6 +4,7 @@ from usagi_agent.pipelines.config.context_build import ContextBuildPipelineConfi
 from usagi_agent.pipelines.rules import (
     EndAdapterConfig,
     ModelRuleAdapterConfig,
+    ModelExecutionRule,
     PreRecallAdapterConfig,
     RecallAdapterConfig,
     ResultProcessAdapterConfig,
@@ -19,7 +20,9 @@ class AgentPipelineConfig(BaseModel):
     context_build: ContextBuildPipelineConfig = Field(
         default_factory=ContextBuildPipelineConfig
     )
-    model: tuple[ModelRuleAdapterConfig, ...] = ()
+    model: tuple[ModelRuleAdapterConfig, ...] = Field(
+        default_factory=lambda: (ModelExecutionRule(),)
+    )
     result_process: tuple[ResultProcessAdapterConfig, ...] = ()
     end: tuple[EndAdapterConfig, ...] = ()
     max_passes: int = Field(default=5, ge=1)

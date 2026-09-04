@@ -10,7 +10,7 @@ from usagi_agent.pipelines.rules.stage import (
     RecallRuleInput,
     RecallRuleOutput,
     RuleExecutionError,
-    StatePatch,
+    RecallStagePatch,
 )
 
 if TYPE_CHECKING:
@@ -28,14 +28,15 @@ class RecallProcessor(StageProcessor):
         super().__init__(runtime, agent)
         self.rules = rules
 
-    async def process(self, state: AgentRunState, context: RunContext) -> StatePatch:
+    async def process(
+        self, state: AgentRunState, context: RunContext
+    ) -> RecallStagePatch:
         rule_input = RecallRuleInput(
             normalized_input_ref=state.get("normalized_input_ref", ""),
             recall_plan_ref=state.get("recall_plan_ref", ""),
             recall_cache=state.get("recall_cache", {}),
-            recall_bundle_ref=state.get("recall_bundle_ref", ""),
         )
-        stage_patch: StatePatch = {}
+        stage_patch: RecallStagePatch = {}
         for config in self.rules:
             result = await config.recall(rule_input, self.runtime, context)
             if isinstance(result, RuleExecutionError):
@@ -45,6 +46,7 @@ class RecallProcessor(StageProcessor):
             if not isinstance(result, RecallRuleOutput):
                 raise TypeError("recall rule returned an invalid output")
             changes = result.model_dump(exclude_none=True)
-            stage_patch.update(changes)
+            if result.recall_cache is not None:
+                stage_patch["recall_cache"] = result.recall_cache
             rule_input = rule_input.model_copy(update=changes)
         return stage_patch

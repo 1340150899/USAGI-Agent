@@ -1,11 +1,68 @@
 """Stage-specific Rule inputs and outputs, independent of LangGraph state."""
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
-StatePatch = dict[str, object]
+class PreRecallStagePatch(TypedDict, total=False):
+    normalized_input_ref: str
+    recall_plan_ref: str
+    recall_cache: dict[str, str]
+    context_pack_ref: str
+    model_request_ref: str
+    context_operation: str
+    model_response_ref: str
+    action_type: str
+    action_hash: str
+    agent_action_ref: str
+    tool_action_refs: list[str]
+    pass_disposition: str
+    side_effect_receipt_refs: list[str]
+
+
+class RecallStagePatch(TypedDict, total=False):
+    recall_cache: dict[str, str]
+
+
+class ContextBuildStagePatch(TypedDict):
+    context_pack_ref: str
+    model_request_ref: str
+    context_operation: str
+    context_compaction_mode: str
+
+
+class ModelStagePatch(TypedDict, total=False):
+    model_response_ref: str
+
+
+class ResultProcessStagePatch(TypedDict, total=False):
+    action_type: str
+    action_hash: str
+    agent_action_ref: str
+    tool_action_refs: list[str]
+    tool_call_count: int
+    tool_observation_refs: list[str]
+    side_effect_receipt_refs: list[str]
+    reason_codes: list[str]
+    pass_disposition: str
+
+
+class EndStagePatch(TypedDict, total=False):
+    pass_disposition: str
+    iteration: int
+    tool_observation_refs: list[str]
+    final_output_ref: str
+
+
+PipelineStagePatch = (
+    PreRecallStagePatch
+    | RecallStagePatch
+    | ContextBuildStagePatch
+    | ModelStagePatch
+    | ResultProcessStagePatch
+    | EndStagePatch
+)
 
 
 class _StageData(BaseModel):
@@ -34,15 +91,14 @@ class RecallRuleInput(_StageData):
     normalized_input_ref: str = ""
     recall_plan_ref: str = ""
     recall_cache: dict[str, str] = Field(default_factory=dict)
-    recall_bundle_ref: str = ""
 
 
 class RecallRuleOutput(_StageData):
     recall_cache: dict[str, str] | None = None
-    recall_bundle_ref: str | None = None
 
 
 class ModelRuleInput(_StageData):
+    agent_id: str = ""
     context_pack_ref: str = ""
     model_request_ref: str = ""
     iteration: int = 0
@@ -69,6 +125,7 @@ class ResultProcessRuleOutput(_StageData):
 
     tool_observation_refs: tuple[str, ...] = ()
     reason_codes: tuple[str, ...] = ()
+    side_effect_receipt_refs: tuple[str, ...] = ()
     # A rule may terminate the pass early (e.g. a human rejected approval);
     # the End router then preserves this disposition unchanged.
     pass_disposition: Literal["next_pass", "run_completed", "run_failed"] | None = None

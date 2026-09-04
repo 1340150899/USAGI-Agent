@@ -104,6 +104,7 @@ class ToolManager:
         arguments: dict[str, object],
         context: ToolContext,
         tool_call_id: str = "",
+        operation_id: str | None = None,
     ) -> ToolObservation:
         started = time.monotonic()
         try:
@@ -136,7 +137,7 @@ class ToolManager:
                 error_message=invalid,
             )
 
-        execution_id = self._execution_id(name, context, tool_call_id)
+        execution_id = operation_id or self._execution_id(name, context, tool_call_id)
         if self._execution_store is not None:
             replayed = await self._replay_settled(execution_id)
             if replayed is not None:

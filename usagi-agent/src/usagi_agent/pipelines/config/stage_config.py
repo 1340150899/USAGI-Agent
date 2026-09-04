@@ -5,6 +5,7 @@ from usagi_agent.pipelines import AgentPipelineConfig
 from usagi_agent.pipelines.rules import (
     CompactionApplyRule,
     LongTermMemoryRecallRule,
+    ModelExecutionRule,
     ToolExecutionRule,
     ToolObservationRecallRule,
 )
@@ -20,6 +21,7 @@ RESEARCH_WRITER_SCENARIO = ScenarioConfig(
             LongTermMemoryRecallRule(),
             ToolObservationRecallRule(),
         ),
+        model=(ModelExecutionRule(),),
         result_process=(ToolExecutionRule(), CompactionApplyRule()),
         max_passes=5,
         max_tool_calls=10,

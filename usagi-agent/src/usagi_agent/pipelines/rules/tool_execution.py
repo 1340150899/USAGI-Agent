@@ -22,7 +22,11 @@ from langgraph.types import interrupt
 
 from usagi_agent.kernel.context import RunContext
 from usagi_agent.memory.types import ToolObservationMemory
-from usagi_agent.pipelines.artifacts import get_model, put_model
+from usagi_agent.pipelines.artifacts import (
+    get_model,
+    put_model,
+    put_side_effect_receipt,
+)
 from usagi_agent.persistence.ports.approval import ApprovalTask
 from usagi_agent.pipelines.rules.result_process import ResultProcessAdapterConfig
 from usagi_agent.pipelines.rules.stage import (
@@ -65,6 +69,7 @@ class ToolExecutionRule(ResultProcessAdapterConfig):
             return None
         artifact_manager = runtime.persistence.artifact_manager
         observation_refs: list[str] = []
+        receipt_refs: list[str] = []
         for action_ref in input.tool_action_refs:
             action = await get_model(artifact_manager, action_ref, ToolAction)
             if action is None:
@@ -72,12 +77,16 @@ class ToolExecutionRule(ResultProcessAdapterConfig):
                     reason_code="tool.action_missing",
                     message=f"tool action artifact not found: {action_ref}",
                 )
-            outcome = await self._execute_one(action, runtime, context)
+            tool_operation_id = f"tool:execute:{context.run_id}:{action.tool_call_id}"
+            outcome = await self._execute_one(
+                action, runtime, context, operation_id=tool_operation_id
+            )
             if isinstance(outcome, _Rejected):
                 return ResultProcessRuleOutput(
                     pass_disposition="run_failed",
                     tool_observation_refs=tuple(observation_refs),
                     reason_codes=("tool.approval_rejected",),
+                    side_effect_receipt_refs=tuple(receipt_refs),
                 )
             observation = outcome.observation
             ref = await put_model(
@@ -87,8 +96,20 @@ class ToolExecutionRule(ResultProcessAdapterConfig):
                 scope_id=context.run_id,
                 operation_id=f"tool:{context.run_id}:{action.tool_call_id}",
             )
-            execution_id = f"{context.run_id}:{action.tool_call_id}"
-            await runtime.tool_manager.attach_observation(execution_id, ref)
+            await runtime.tool_manager.attach_observation(tool_operation_id, ref)
+            receipt_refs.append(
+                await put_side_effect_receipt(
+                    artifact_manager,
+                    operation_id=tool_operation_id,
+                    effect_type="tool.execute",
+                    result_ref=ref,
+                    tenant_id=context.tenant_id,
+                    scope_id=context.run_id,
+                )
+            )
+            event_operation_id = (
+                f"memory:tool-event:{context.run_id}:{action.tool_call_id}"
+            )
             event = await runtime.memory_manager.append_event(
                 session_id=context.thread_id,
                 role="tool",
@@ -98,20 +119,51 @@ class ToolExecutionRule(ResultProcessAdapterConfig):
                     "tool_name": action.tool_name,
                     "tool_call_id": action.tool_call_id,
                 },
+                operation_id=event_operation_id,
+            )
+            receipt_refs.append(
+                await put_side_effect_receipt(
+                    artifact_manager,
+                    operation_id=event_operation_id,
+                    effect_type="memory.append_event",
+                    result_ref=event.event_id,
+                    tenant_id=context.tenant_id,
+                    scope_id=context.run_id,
+                )
             )
             if observation.status == "success":
-                await self._persist_observation_candidate(
+                candidate_operation_id = (
+                    f"memory:tool-observation:{context.run_id}:"
+                    f"{action.tool_call_id}"
+                )
+                candidate = await self._persist_observation_candidate(
                     action, observation, outcome.arguments,
                     event.event_id, runtime, context,
+                    operation_id=candidate_operation_id,
+                )
+                receipt_refs.append(
+                    await put_side_effect_receipt(
+                        artifact_manager,
+                        operation_id=candidate_operation_id,
+                        effect_type="memory.put_tool_observation",
+                        result_ref=candidate.memory_id,
+                        tenant_id=context.tenant_id,
+                        scope_id=context.run_id,
+                    )
                 )
             observation_refs.append(ref)
-        return ResultProcessRuleOutput(tool_observation_refs=tuple(observation_refs))
+        return ResultProcessRuleOutput(
+            tool_observation_refs=tuple(observation_refs),
+            side_effect_receipt_refs=tuple(receipt_refs),
+        )
 
     async def _execute_one(
         self,
         action: ToolAction,
         runtime: "ServerRuntime",
         context: RunContext,
+        *,
+        operation_id: str,
     ) -> _ExecutionOutcome | _Rejected:
         tool_context = context.to_tool_context()
         arguments: dict[str, object] = dict(action.arguments)
@@ -200,6 +252,7 @@ class ToolExecutionRule(ResultProcessAdapterConfig):
                 arguments=arguments,
                 context=tool_context,
                 tool_call_id=action.tool_call_id,
+                operation_id=operation_id,
             ),
             arguments=arguments,
         )
@@ -212,7 +265,9 @@ class ToolExecutionRule(ResultProcessAdapterConfig):
         event_id: str,
         runtime: "ServerRuntime",
         context: RunContext,
-    ) -> None:
+        *,
+        operation_id: str,
+    ) -> ToolObservationMemory:
         """Persist a successful observation as a reusable candidate.
 
         Key is (tool, normalized arguments) so put_tool_observation's
@@ -223,7 +278,7 @@ class ToolExecutionRule(ResultProcessAdapterConfig):
         arguments_digest = hashlib.sha256(
             json.dumps(arguments, sort_keys=True, ensure_ascii=False).encode()
         ).hexdigest()[:16]
-        await runtime.memory_manager.put_tool_observation(
+        return await runtime.memory_manager.put_tool_observation(
             ToolObservationMemory(
                 memory_id=f"memory_{uuid4().hex}",
                 namespace="",  # MemoryManager fills the namespace
@@ -234,4 +289,5 @@ class ToolExecutionRule(ResultProcessAdapterConfig):
                 source_event_ids=[event_id],
             ),
             context.to_tool_context(),
+            operation_id=operation_id,
         )

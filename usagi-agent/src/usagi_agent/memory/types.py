@@ -34,6 +34,7 @@ class SessionContext(BaseModel):
     recent_event_ids: list[str] = Field(default_factory=list)
     compacted_until: str | None = None
     extracted_until: str | None = None
+    applied_operation_ids: list[str] = Field(default_factory=list)
 
 
 class ContextPolicy(BaseModel):

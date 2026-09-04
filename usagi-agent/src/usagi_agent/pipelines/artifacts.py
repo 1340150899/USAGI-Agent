@@ -36,6 +36,36 @@ class RecallBundle(BaseModel):
     hits: list[dict[str, object]] = Field(default_factory=list)
 
 
+class SideEffectReceipt(BaseModel):
+    """Durable acknowledgement of an idempotent memory or tool side effect."""
+
+    operation_id: str
+    effect_type: str
+    result_ref: str = ""
+
+
+async def put_side_effect_receipt(
+    manager: ArtifactManager,
+    *,
+    operation_id: str,
+    effect_type: str,
+    result_ref: str,
+    tenant_id: str,
+    scope_id: str,
+) -> str:
+    return await put_model(
+        manager,
+        SideEffectReceipt(
+            operation_id=operation_id,
+            effect_type=effect_type,
+            result_ref=result_ref,
+        ),
+        tenant_id=tenant_id,
+        scope_id=scope_id,
+        operation_id=f"receipt:{operation_id}",
+    )
+
+
 async def put_recall_bundle(
     manager: ArtifactManager,
     *,

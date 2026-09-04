@@ -5,6 +5,7 @@ from usagi_agent.pipelines.rules.context_build import (
 )
 from usagi_agent.pipelines.rules.end import EndAdapterConfig
 from usagi_agent.pipelines.rules.model import ModelRuleAdapterConfig
+from usagi_agent.pipelines.rules.model_execution import ModelExecutionRule
 from usagi_agent.pipelines.rules.memory import (
     LongTermMemoryRecallRule,
     ToolObservationRecallRule,
@@ -25,19 +26,18 @@ from usagi_agent.pipelines.rules.stage import (
     ResultProcessRuleInput,
     ResultProcessRuleOutput,
     RuleExecutionError,
-    StatePatch,
 )
 from usagi_agent.pipelines.rules.tool_execution import ToolExecutionRule
 
 __all__ = [
     "CompactionApplyRule",
     "ContextFilterAdapterConfig", "ContextRankAdapterConfig",
-    "EndAdapterConfig", "ModelRuleAdapterConfig",
+    "EndAdapterConfig", "ModelRuleAdapterConfig", "ModelExecutionRule",
     "LongTermMemoryRecallRule",
     "PreRecallAdapterConfig", "RecallAdapterConfig", "ResultProcessAdapterConfig",
     "ToolExecutionRule", "ToolObservationRecallRule",
     "EndRuleInput", "EndRuleOutput", "ModelRuleInput", "ModelRuleOutput",
     "PreRecallRuleInput", "PreRecallRuleOutput", "RecallRuleInput", "RecallRuleOutput",
     "ResultProcessRuleInput", "ResultProcessRuleOutput", "RuleExecutionError",
-    "StageType", "StatePatch",
+    "StageType",
 ]

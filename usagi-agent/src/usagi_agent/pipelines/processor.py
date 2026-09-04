@@ -13,7 +13,14 @@ from usagi_agent.pipelines.processors import (
     RecallProcessor,
     ResultProcessProcessor,
 )
-from usagi_agent.pipelines.rules.stage import StatePatch
+from usagi_agent.pipelines.rules.stage import (
+    ContextBuildStagePatch,
+    EndStagePatch,
+    ModelStagePatch,
+    PreRecallStagePatch,
+    RecallStagePatch,
+    ResultProcessStagePatch,
+)
 
 if TYPE_CHECKING:
     from usagi_agent.scenarios.config import ScenarioConfig
@@ -46,30 +53,30 @@ class PipelineProcessor:
 
     async def process_pre_recall(
         self, state: AgentRunState, context: RunContext
-    ) -> StatePatch:
+    ) -> PreRecallStagePatch:
         return await self._pre_recall.process(state, context)
 
     async def process_recall(
         self, state: AgentRunState, context: RunContext
-    ) -> StatePatch:
+    ) -> RecallStagePatch:
         return await self._recall.process(state, context)
 
     async def process_context_build(
         self, state: AgentRunState, context: RunContext
-    ) -> StatePatch:
+    ) -> ContextBuildStagePatch:
         return await self._context_build.process(state, context)
 
     async def process_model(
         self, state: AgentRunState, context: RunContext
-    ) -> StatePatch:
+    ) -> ModelStagePatch:
         return await self._model.process(state, context)
 
     async def process_result(
         self, state: AgentRunState, context: RunContext
-    ) -> StatePatch:
+    ) -> ResultProcessStagePatch:
         return await self._result_process.process(state, context)
 
     async def process_end(
         self, state: AgentRunState, context: RunContext
-    ) -> StatePatch:
+    ) -> EndStagePatch:
         return await self._end.process(state, context)

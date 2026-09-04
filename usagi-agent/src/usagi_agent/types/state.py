@@ -1,50 +1,61 @@
-"""State schemas (design §8.1, §8.2).
-
-State holds ONLY serializable low-sensitivity routing fields and ArtifactRef. Raw chat,
-images, prompts, model responses, ContextPack, AgentAction, Tool params/output and
-FinalOutput must never enter checkpoint as embedded objects. The State contract test
-enforces this (§8.2, §31).
-"""
+"""Serializable graph-state schemas and reducers."""
 from __future__ import annotations
 
-from typing import Annotated, Literal, TypedDict
+from typing import Annotated, TypedDict
 
-from usagi_agent.types.budget import BudgetSummary
-from usagi_agent.types.refs import (
-    AgentActionRef,
-    AgentResultRef,
-    ArtifactRef,
-    ContextPackRef,
-    FinalOutputRef,
-    ModelResponseRef,
-    ModelRequestRef,
-    PassResultRef,
-    ToolObservationRef,
+from usagi_agent.types.refs import AgentResultRef, ArtifactRef
+
+
+RUN_SCOPED_STATE_FIELDS = frozenset(
+    {
+        "run_id",
+        "request_ref",
+        "normalized_input_ref",
+        "context_compaction_mode",
+        "iteration",
+        "tool_call_count",
+        "reason_codes",
+        "tool_observation_refs",
+        "side_effect_receipt_refs",
+        "final_output_ref",
+    }
+)
+
+PASS_SCOPED_STATE_FIELDS = frozenset(
+    {
+        "recall_plan_ref",
+        "recall_cache",
+        "context_pack_ref",
+        "model_request_ref",
+        "context_operation",
+        "model_response_ref",
+        "action_type",
+        "action_hash",
+        "agent_action_ref",
+        "tool_action_refs",
+        "pass_disposition",
+    }
 )
 
 
-# --- Reducers (pure functions; the Compiler registers them under ReducerRef strings) ---
-
 def append_dedup(left: list, right: list | None) -> list:  # type: ignore[type-arg]
-    """Append new items, deduplicating by artifact_id (or value for scalars)."""
+    """Append items while deduplicating by artifact id or scalar value."""
     if right is None:
         return list(left)
-    seen = {getattr(v, "artifact_id", v) for v in left}
-    out = list(left)
-    for v in right:
-        key = getattr(v, "artifact_id", v)
+    seen = {getattr(value, "artifact_id", value) for value in left}
+    output = list(left)
+    for value in right:
+        key = getattr(value, "artifact_id", value)
         if key not in seen:
-            out.append(v)
+            output.append(value)
             seen.add(key)
-    return out
+    return output
 
 
 def last_write(left: object, right: object) -> object:
-    """Last-write-wins reducer for scalar routing fields."""
+    """Use the most recent non-None graph update."""
     return right if right is not None else left
 
-
-# --- State TypedDicts (total=False: every field is optional) ---
 
 class WorkflowState(TypedDict, total=False):
     business_input_ref: ArtifactRef
@@ -53,35 +64,42 @@ class WorkflowState(TypedDict, total=False):
     artifact_refs: list[ArtifactRef]
 
 
-class AgentLoopState(TypedDict, total=False):
-    request_ref: ArtifactRef
-    recall_cache: dict[str, ArtifactRef]
-    tool_observation_refs: Annotated[list[ToolObservationRef], append_dedup]
-    delegated_result_refs: Annotated[list[AgentResultRef], append_dedup]
-    iteration: int
-    budget_summary: BudgetSummary
-    pass_disposition: Literal["next_pass", "run_completed", "run_failed"]
-    pass_result_ref: PassResultRef
-    final_output_ref: FinalOutputRef | None
+class AgentRunState(TypedDict, total=False):
+    """The one authoritative state schema for the compiled agent graph."""
 
+    # Run-scoped fields.
+    run_id: str
+    request_ref: str
+    normalized_input_ref: str
+    context_compaction_mode: str
+    iteration: Annotated[int, last_write]
+    tool_call_count: Annotated[int, last_write]
+    reason_codes: Annotated[list[str], append_dedup]
+    tool_observation_refs: Annotated[list[str], append_dedup]
+    side_effect_receipt_refs: Annotated[list[str], append_dedup]
+    final_output_ref: str
 
-class AgentPassState(TypedDict, total=False):
-    normalized_input_ref: ArtifactRef
-    recall_plan_ref: ArtifactRef
-    recall_bundle_ref: ArtifactRef
-    context_pack_ref: ContextPackRef
-    model_request_ref: ModelRequestRef
-    model_response_ref: ModelResponseRef
-    action_type: Literal["final", "tool", "delegate", "need_input", "failure"]
+    # Pass-scoped fields, reset by PreRecall before every pass.
+    recall_plan_ref: str
+    recall_cache: dict[str, str]
+    context_pack_ref: str
+    model_request_ref: str
+    context_operation: str
+    model_response_ref: str
+    action_type: str
     action_hash: str
-    agent_action_ref: AgentActionRef
-    pass_disposition: Literal["next_pass", "run_completed", "run_failed"]
-    pass_result_ref: PassResultRef
+    agent_action_ref: str
+    tool_action_refs: Annotated[list[str], last_write]
+    pass_disposition: Annotated[str, last_write]
+
+
+# Compatibility names now point to the same schema instead of defining a
+# second, divergent set of agent state fields.
+AgentLoopState = AgentRunState
+AgentPassState = AgentRunState
 
 
 class ModuleState(TypedDict, total=False):
-    """Module-private state base; concrete Module Pipelines extend with their own fields."""
-
     module_input_ref: ArtifactRef
     module_output_ref: ArtifactRef
     status: str

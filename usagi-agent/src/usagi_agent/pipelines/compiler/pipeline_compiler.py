@@ -9,13 +9,13 @@ from langchain_core.runnables import RunnableConfig
 from usagi_agent.kernel.context import RunContext
 from usagi_agent.pipelines.loop.state import AgentRunState
 from usagi_agent.pipelines.processor import PipelineProcessor
-from usagi_agent.pipelines.rules import StatePatch
+from usagi_agent.pipelines.rules.stage import PipelineStagePatch
 from usagi_agent.scenarios.config import ScenarioConfig
 
 if TYPE_CHECKING:
     from usagi_agent.server.runtime import ServerRuntime
 
-StageProcess = Callable[[AgentRunState, RunContext], Awaitable[StatePatch]]
+StageProcess = Callable[[AgentRunState, RunContext], Awaitable[PipelineStagePatch]]
 
 
 def _wrap_stage(
@@ -39,7 +39,7 @@ def _wrap_stage(
         result = await process(state, context)
         if not isinstance(result, dict):
             raise TypeError("pipeline stage must return dict")
-        return result
+        return dict(result)
 
     return node
 

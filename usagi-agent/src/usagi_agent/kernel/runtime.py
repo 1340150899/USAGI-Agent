@@ -444,7 +444,7 @@ class KernelRuntime:
                 ),
             }
         }
-        # The AgentLoop expects an AgentLoopState with request_ref set.
+        # The authoritative AgentRunState starts with run-scoped request data.
         input_state = {
             "request_ref": input_ref.artifact_id,
             "run_id": run_id,

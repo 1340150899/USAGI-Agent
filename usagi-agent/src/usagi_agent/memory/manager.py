@@ -60,9 +60,25 @@ class DefaultMemoryManager:
     async def append_event(
         self, *, session_id: str, role: str, content: str, ctx: ToolContext,
         metadata: dict[str, object] | None = None,
+        operation_id: str | None = None,
     ) -> RawEvent:
+        event_id = (
+            f"event_{hashlib.sha256(operation_id.encode()).hexdigest()}"
+            if operation_id
+            else f"event_{uuid4().hex}"
+        )
+        existing = await self.stores.raw_conversations.aget(
+            self._events_ns(session_id, ctx), event_id
+        )
+        if existing is not None:
+            event = RawEvent.model_validate(existing.value)
+            session = await self.get_session_context(session_id, ctx)
+            if event_id not in session.recent_event_ids:
+                session.recent_event_ids.append(event_id)
+                await self.save_session_context(session_id, session, ctx)
+            return event
         event = RawEvent(
-            event_id=f"event_{uuid4().hex}", session_id=session_id,
+            event_id=event_id, session_id=session_id,
             role=role, content=content, metadata=metadata or {},  # type: ignore[arg-type]
         )
         await self.stores.raw_conversations.aput(
@@ -189,6 +205,7 @@ class DefaultMemoryManager:
         event_ids: list[str],
         ctx: ToolContext,
         *,
+        operation_id: str | None = None,
         memory_candidates: list[LongTermMemoryCandidate] | None = None,
         **updates: object,
     ) -> SessionContext:
@@ -199,6 +216,8 @@ class DefaultMemoryManager:
         enter the principal-scoped long-term store.
         """
         session = await self.get_session_context(session_id, ctx)
+        if operation_id and operation_id in session.applied_operation_ids:
+            return session
         selected = set(event_ids)
         events = [
             event
@@ -218,6 +237,8 @@ class DefaultMemoryManager:
                 events, memory_candidates or [], ctx
             )
             session.extracted_until = checkpoint
+        if operation_id:
+            session.applied_operation_ids.append(operation_id)
         await self.save_session_context(session_id, session, ctx)
         return session
 
@@ -253,13 +274,18 @@ class DefaultMemoryManager:
             )
 
     async def apply_context_update(
-        self, session_id: str, ctx: ToolContext, **updates: object
+        self, session_id: str, ctx: ToolContext, *,
+        operation_id: str | None = None, **updates: object
     ) -> SessionContext:
         """ResultProcess uses this single entry point for structured state updates."""
         session = await self.get_session_context(session_id, ctx)
+        if operation_id and operation_id in session.applied_operation_ids:
+            return session
         for field in ("summary", "facts", "constraints", "goals", "open_tasks", "artifacts"):
             if field in updates and updates[field] is not None:
                 setattr(session, field, updates[field])
+        if operation_id:
+            session.applied_operation_ids.append(operation_id)
         await self.save_session_context(session_id, session, ctx)
         return session
 
@@ -281,10 +307,25 @@ class DefaultMemoryManager:
         return ("tool_observations", tenant_id, principal_id)
 
     async def put_tool_observation(
-        self, record: ToolObservationMemory, ctx: ToolContext
+        self, record: ToolObservationMemory, ctx: ToolContext, *,
+        operation_id: str | None = None,
     ) -> ToolObservationMemory:
         """Persist a tool result candidate; same key supersedes to the freshest."""
         namespace = self._tool_observation_ns(ctx)
+        if operation_id:
+            record = record.model_copy(
+                update={
+                    "memory_id": "memory_"
+                    + hashlib.sha256(operation_id.encode()).hexdigest()
+                }
+            )
+            existing_by_operation = await self.stores.tool_observations.aget(
+                namespace, record.memory_id
+            )
+            if existing_by_operation is not None:
+                return ToolObservationMemory.model_validate(
+                    existing_by_operation.value
+                )
         record = record.model_copy(update={"namespace": "/".join(namespace)})
         existing = await self.stores.tool_observations.asearch(
             namespace, filter={"key": record.key, "status": "active"}, limit=100

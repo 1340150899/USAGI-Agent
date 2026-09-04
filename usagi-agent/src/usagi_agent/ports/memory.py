@@ -27,6 +27,7 @@ class MemoryManager(Protocol):
     async def append_event(
         self, *, session_id: str, role: str, content: str, ctx: ToolContext,
         metadata: dict[str, object] | None = None,
+        operation_id: str | None = None,
     ) -> RawEvent: ...
 
     async def list_events(
@@ -42,12 +43,14 @@ class MemoryManager(Protocol):
     ) -> PreparedContext: ...
 
     async def apply_context_update(
-        self, session_id: str, ctx: ToolContext, **updates: object,
+        self, session_id: str, ctx: ToolContext, *,
+        operation_id: str | None = None, **updates: object,
     ) -> SessionContext: ...
 
     async def apply_compaction(
         self, session_id: str, event_ids: list[str], ctx: ToolContext,
-        *, memory_candidates: list[LongTermMemoryCandidate] | None = None,
+        *, operation_id: str | None = None,
+        memory_candidates: list[LongTermMemoryCandidate] | None = None,
         **updates: object,
     ) -> SessionContext: ...
 
@@ -56,7 +59,8 @@ class MemoryManager(Protocol):
     ) -> list[LongTermMemory]: ...
 
     async def put_tool_observation(
-        self, record: ToolObservationMemory, ctx: ToolContext,
+        self, record: ToolObservationMemory, ctx: ToolContext, *,
+        operation_id: str | None = None,
     ) -> ToolObservationMemory: ...
 
     async def get_tool_observations(

@@ -35,7 +35,7 @@ async def _emit(
     )
     cache = dict(input.recall_cache)
     cache[source] = ref
-    return RecallRuleOutput(recall_cache=cache, recall_bundle_ref=ref)
+    return RecallRuleOutput(recall_cache=cache)
 
 
 class LongTermMemoryRecallRule(RecallAdapterConfig):

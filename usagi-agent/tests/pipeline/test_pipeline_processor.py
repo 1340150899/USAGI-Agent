@@ -15,6 +15,7 @@ from usagi_agent.pipelines.config import ContextBuildPipelineConfig
 from usagi_agent.pipelines.loop.state import AgentRunState
 from usagi_agent.pipelines.processor import PipelineProcessor
 from usagi_agent.pipelines.processors.context_build import ContextBuildProcessor
+from usagi_agent.pipelines.processors.model import ModelProcessor
 from usagi_agent.pipelines.processors.pre_recall import PreRecallProcessor
 from usagi_agent.pipelines.processors.recall import RecallProcessor
 from usagi_agent.pipelines.rules import (
@@ -23,6 +24,9 @@ from usagi_agent.pipelines.rules import (
     PreRecallAdapterConfig,
     PreRecallRuleInput,
     PreRecallRuleOutput,
+    ModelRuleAdapterConfig,
+    ModelRuleInput,
+    ModelRuleOutput,
     RuleExecutionError,
     StageType,
 )
@@ -59,6 +63,11 @@ class _FailingPreRecallRule(PreRecallAdapterConfig):
         self, input: PreRecallRuleInput, runtime, context
     ) -> RuleExecutionError:
         return RuleExecutionError(reason_code="rule.failed", message="expected failure")
+
+
+class _StaticModelRule(ModelRuleAdapterConfig):
+    async def model(self, input: ModelRuleInput, runtime, context) -> ModelRuleOutput:
+        return ModelRuleOutput(model_response_ref="response-from-rule")
 
 
 _context_calls: list[str] = []
@@ -122,10 +131,12 @@ async def test_stage_processor_runs_all_rules_in_order_with_accumulated_state():
 
     assert cast(_FirstPreRecallRule, pipeline.pre_recall[0]).calls == ["first"]
     assert cast(_SecondPreRecallRule, pipeline.pre_recall[1]).calls == ["second"]
-    assert patch == {
-        "normalized_input_ref": "normalized",
-        "recall_plan_ref": "plan",
-    }
+    assert patch.get("normalized_input_ref") == "normalized"
+    assert patch.get("recall_plan_ref") == "plan"
+    assert patch.get("recall_cache") == {}
+    assert patch.get("model_response_ref") == ""
+    assert patch.get("tool_action_refs") == []
+    assert patch.get("pass_disposition") == ""
 
 
 @pytest.mark.asyncio
@@ -137,6 +148,21 @@ async def test_stage_processor_allows_an_empty_stage():
     )
 
     assert await processor.process(AgentRunState(), _context()) == {}
+
+
+@pytest.mark.asyncio
+async def test_model_processor_uses_rule_output_without_implicit_model_call():
+    processor = ModelProcessor(
+        (
+            _StaticModelRule(name="static", type=StageType.MODEL),
+        ),
+        cast(ServerRuntime, object()),
+        cast(AgentSpec, type("Agent", (), {"id": "agent"})()),
+    )
+
+    patch = await processor.process(AgentRunState(), _context())
+
+    assert patch == {"model_response_ref": "response-from-rule"}
 
 
 @pytest.mark.asyncio
@@ -326,6 +352,7 @@ async def test_llm_compaction_is_applied_then_restarts_the_pipeline(
     state.update(cast(AgentRunState, await processor.process_model(state, context)))
     state.update(cast(AgentRunState, await processor.process_result(state, context)))
     assert state.get("action_type") == "compaction"
+    assert state.get("side_effect_receipt_refs")
 
     session = await runtime.memory_manager.get_session_context(
         context.thread_id, tool_context
@@ -357,7 +384,7 @@ async def test_llm_compaction_is_applied_then_restarts_the_pipeline(
     assert state.get("context_operation") == "normal"
     request = await get_model(
         runtime.persistence.artifact_manager,
-        state["model_request_ref"],
+        state.get("model_request_ref", ""),
         ModelRequest,
     )
     assert request is not None

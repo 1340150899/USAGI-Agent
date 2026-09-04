@@ -18,7 +18,7 @@ from usagi_agent.pipelines.rules.stage import (
     EndRuleInput,
     EndRuleOutput,
     RuleExecutionError,
-    StatePatch,
+    EndStagePatch,
 )
 from usagi_agent.types.action import FinalAction
 
@@ -37,7 +37,7 @@ class EndProcessor(StageProcessor):
         super().__init__(runtime, agent)
         self.rules = rules
 
-    async def process(self, state: AgentRunState, context: RunContext) -> StatePatch:
+    async def process(self, state: AgentRunState, context: RunContext) -> EndStagePatch:
         rule_input = EndRuleInput(
             action_type=state.get("action_type", ""),
             action_hash=state.get("action_hash", ""),
@@ -47,7 +47,7 @@ class EndProcessor(StageProcessor):
             tool_observation_refs=tuple(state.get("tool_observation_refs", [])),
             final_output_ref=state.get("final_output_ref", ""),
         )
-        stage_patch: StatePatch = {}
+        stage_patch: EndStagePatch = {}
         new_observation_refs: list[str] = []
         for config in self.rules:
             result = await config.end(rule_input, self.runtime, context)
@@ -84,7 +84,14 @@ class EndProcessor(StageProcessor):
             )
         if "pass_disposition" not in stage_patch:
             result = await self._default_end(rule_input, context)
-            stage_patch.update(result.model_dump(exclude_none=True))
+            stage_patch["pass_disposition"] = result.pass_disposition
+            stage_patch["iteration"] = result.iteration
+            if result.tool_observation_refs:
+                stage_patch["tool_observation_refs"] = list(
+                    result.tool_observation_refs
+                )
+            if result.final_output_ref is not None:
+                stage_patch["final_output_ref"] = result.final_output_ref
         return stage_patch
 
     async def _default_end(self, input: EndRuleInput, context: RunContext) -> EndRuleOutput:

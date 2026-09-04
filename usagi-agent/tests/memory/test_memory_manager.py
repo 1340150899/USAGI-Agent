@@ -106,6 +106,30 @@ async def test_compaction_keeps_raw_events_and_extracts_incrementally(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_append_event_operation_id_is_stable_on_replay(tmp_path: Path):
+    manager = DefaultMemoryManager(path=tmp_path / "memory.json")
+    ctx = _ctx()
+
+    first = await manager.append_event(
+        session_id="session",
+        role="user",
+        content="hello",
+        ctx=ctx,
+        operation_id="memory:user-event:run",
+    )
+    replayed = await manager.append_event(
+        session_id="session",
+        role="user",
+        content="hello",
+        ctx=ctx,
+        operation_id="memory:user-event:run",
+    )
+
+    assert replayed.event_id == first.event_id
+    assert len(await manager.list_events("session", ctx)) == 1
+
+
+@pytest.mark.asyncio
 async def test_raw_and_short_term_are_principal_and_session_isolated(tmp_path: Path):
     manager = DefaultMemoryManager(path=tmp_path / "memory.json")
     alice = _ctx("alice")

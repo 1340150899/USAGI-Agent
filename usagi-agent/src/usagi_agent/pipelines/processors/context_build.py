@@ -15,7 +15,7 @@ from usagi_agent.pipelines.artifacts import (
 from usagi_agent.pipelines.config.context_build import ContextBuildPipelineConfig
 from usagi_agent.pipelines.loop.state import AgentRunState
 from usagi_agent.pipelines.processors.base import StageProcessor
-from usagi_agent.pipelines.rules.stage import RuleExecutionError, StatePatch
+from usagi_agent.pipelines.rules.stage import ContextBuildStagePatch, RuleExecutionError
 from usagi_agent.prompts import CONTEXT_COMPACTION_PROMPT, prompt_for_agent
 from usagi_agent.tools import AllowlistSelector, to_model_tool
 from usagi_agent.types.model import ModelRequest
@@ -46,7 +46,9 @@ class ContextBuildProcessor(StageProcessor):
             self._tool_selector = AllowlistSelector(self.runtime.tool_manager)
         return self._tool_selector
 
-    async def process(self, state: AgentRunState, context: RunContext) -> StatePatch:
+    async def process(
+        self, state: AgentRunState, context: RunContext
+    ) -> ContextBuildStagePatch:
         recalled_contexts = await self._load_recalled_contexts(state)
         recalled_contexts = await self._run_filters(recalled_contexts, context)
         await self._run_rankers(recalled_contexts, context)
