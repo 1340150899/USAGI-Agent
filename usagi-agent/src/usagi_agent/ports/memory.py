@@ -6,18 +6,13 @@ from typing import Literal, Protocol, runtime_checkable
 from pydantic import BaseModel, Field
 
 from usagi_agent.ports.context import HealthStatus, ToolContext
-from usagi_agent.types.context import RecallQuery
+from usagi_agent.types.context import LongTermMemoryCandidate, RecallQuery
 from usagi_agent.types.policy import MemoryCandidate
 from usagi_agent.types.refs import MemoryRef
 from usagi_agent.memory.types import (
     ContextPolicy, LongTermMemory, MemoryExtractionRequest, PreparedContext,
-    RawEvent, SessionContext,
+    RawEvent, SessionContext, ToolObservationMemory,
 )
-
-
-class MemoryRecallResult(BaseModel):
-    hits: list = Field(default_factory=list)  # list[MemoryHit]
-    reason_codes: list[str] = Field(default_factory=list)
 
 
 class MemoryMutationResult(BaseModel):
@@ -34,6 +29,10 @@ class MemoryManager(Protocol):
         metadata: dict[str, object] | None = None,
     ) -> RawEvent: ...
 
+    async def list_events(
+        self, session_id: str, ctx: ToolContext,
+    ) -> list[RawEvent]: ...
+
     async def get_session_context(
         self, session_id: str, ctx: ToolContext,
     ) -> SessionContext: ...
@@ -48,10 +47,21 @@ class MemoryManager(Protocol):
 
     async def apply_compaction(
         self, session_id: str, event_ids: list[str], ctx: ToolContext,
+        *, memory_candidates: list[LongTermMemoryCandidate] | None = None,
         **updates: object,
     ) -> SessionContext: ...
 
-    async def recall(self, query: RecallQuery, ctx: ToolContext) -> MemoryRecallResult: ...
+    async def get_long_term_memories(
+        self, query: RecallQuery, ctx: ToolContext,
+    ) -> list[LongTermMemory]: ...
+
+    async def put_tool_observation(
+        self, record: ToolObservationMemory, ctx: ToolContext,
+    ) -> ToolObservationMemory: ...
+
+    async def get_tool_observations(
+        self, query: RecallQuery, ctx: ToolContext, *, limit: int = 10,
+    ) -> list[ToolObservationMemory]: ...
 
     async def extract(
         self, request: MemoryExtractionRequest, ctx: ToolContext,

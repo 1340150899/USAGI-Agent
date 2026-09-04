@@ -1,18 +1,43 @@
-"""Minimal model-facing tool declaration and reconciliation records."""
+"""Model-facing tool declaration and reconciliation records (design §21.3, §21.6)."""
 from __future__ import annotations
 
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from usagi_agent.types.settlement import WriteSafetyMode
+
+ToolErrorCode = Literal[
+    "tool.invalid_arguments",  # arguments failed the declared parameter schema
+    "tool.parse_error",        # model-emitted arguments were not valid JSON
+    "tool.denied",             # scope or policy refused execution
+    "tool.timeout",            # execution exceeded timeout_seconds (read class)
+    "tool.execution_failed",   # adapter raised or returned an unusable result
+    "tool.unknown",            # write-class timeout/crash: result cannot be assumed
+]
+
+
 class ToolSpec(BaseModel):
-    """Only the information a model needs to choose a function tool."""
+    """Model-facing declaration plus the execution metadata ToolRuntime needs."""
 
     model_config = ConfigDict(frozen=True)
 
     name: str
     description: str
     parameters: dict[str, Any] = Field(default_factory=dict)
+    # Capability metadata (§21.3): risk drives retry/approval/timeout semantics.
+    risk: Literal["read", "write", "high_risk_write"] = "read"
+    write_safety: WriteSafetyMode | None = None
+    # Execution budgets; enforced by ToolRuntime, not by adapters.
+    timeout_seconds: float = 30.0
+    max_concurrency: int = 5
+    max_retries: int = 0  # read class only
+    retry_backoff_seconds: float = 1.0
+    max_output_bytes: int = 64_000
+    # Extension seams: ecosystem kind, sandbox dispatch, scope checks.
+    adapter_kind: Literal["python", "http", "mcp"] = "python"
+    execution_env: Literal["in_process", "sandbox"] = "in_process"
+    required_scopes: tuple[str, ...] = ()
 
 
 def to_model_tool(spec: ToolSpec) -> dict[str, object]:

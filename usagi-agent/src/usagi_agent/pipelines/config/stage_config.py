@@ -2,7 +2,12 @@
 from decimal import Decimal
 
 from usagi_agent.pipelines import AgentPipelineConfig
-from usagi_agent.pipelines.rules import LongTermMemoryRecallRule
+from usagi_agent.pipelines.rules import (
+    CompactionApplyRule,
+    LongTermMemoryRecallRule,
+    ToolExecutionRule,
+    ToolObservationRecallRule,
+)
 from usagi_agent.scenarios import ScenarioConfig
 from usagi_agent.types.budget import Budget
 
@@ -11,7 +16,11 @@ RESEARCH_WRITER_SCENARIO = ScenarioConfig(
     key="example.research_writer",
     agent_id="research_writer",
     pipeline=AgentPipelineConfig(
-        recall=(LongTermMemoryRecallRule(),),
+        recall=(
+            LongTermMemoryRecallRule(),
+            ToolObservationRecallRule(),
+        ),
+        result_process=(ToolExecutionRule(), CompactionApplyRule()),
         max_passes=5,
         max_tool_calls=10,
         max_delegations=0,

@@ -143,3 +143,21 @@ class ContextUpdate(BaseModel):
     goals: list[str] | None = None
     open_tasks: list[str] | None = None
     artifacts: list[str] | None = None
+
+
+class LongTermMemoryCandidate(BaseModel):
+    """A durable fact or experience explicitly selected by the model."""
+
+    content: str = Field(min_length=1)
+    type: Literal["semantic", "episodic", "procedural"] = "semantic"
+    confidence: float = Field(default=0.8, ge=0, le=1)
+    importance: float = Field(default=0.5, ge=0, le=1)
+
+
+class CompactionResult(BaseModel):
+    """Separates the short-term replacement from long-term candidates."""
+
+    context_update: ContextUpdate
+    long_term_memory_candidates: list[LongTermMemoryCandidate] = Field(
+        default_factory=list
+    )

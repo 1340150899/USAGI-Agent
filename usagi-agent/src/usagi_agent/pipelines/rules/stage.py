@@ -61,12 +61,17 @@ class ResultProcessRuleInput(_StageData):
     action_type: str = ""
     action_hash: str = ""
     agent_action_ref: str = ""
+    tool_action_refs: tuple[str, ...] = ()
 
 
 class ResultProcessRuleOutput(_StageData):
-    action_type: str
-    action_hash: str
-    agent_action_ref: str
+    """Rules react to the already-formed action; every field is optional."""
+
+    tool_observation_refs: tuple[str, ...] = ()
+    reason_codes: tuple[str, ...] = ()
+    # A rule may terminate the pass early (e.g. a human rejected approval);
+    # the End router then preserves this disposition unchanged.
+    pass_disposition: Literal["next_pass", "run_completed", "run_failed"] | None = None
 
 
 class EndRuleInput(_StageData):

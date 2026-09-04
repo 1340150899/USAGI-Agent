@@ -55,7 +55,7 @@ class RecallBudget(BaseModel):
 
 
 class ContextBudget(BaseModel):
-    """Token budget for ContextBuildRule, computed by AgentManager (§17.3)."""
+    """Token budget computed and consumed by ContextBuildRule (§17.3)."""
 
     total_tokens: int
     system_prompt_tokens: int

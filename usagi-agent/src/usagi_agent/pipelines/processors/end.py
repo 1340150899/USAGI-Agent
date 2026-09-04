@@ -1,13 +1,16 @@
+"""End stage: route the finished pass (design §20).
+
+Pure disposition router. Action execution already happened in the
+ResultProcess stage; this stage consumes the formed action_type plus any
+observation/reason state and decides next_pass / run_completed / run_failed.
+Custom end rules still run first and may override the disposition.
+"""
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from langgraph.types import interrupt
-
 from usagi_agent.kernel.context import RunContext
-from usagi_agent.persistence.ports.approval import ApprovalTask
-from usagi_agent.pipelines.artifacts import get_model, put_model
+from usagi_agent.pipelines.artifacts import get_model
 from usagi_agent.pipelines.loop.state import AgentRunState
 from usagi_agent.pipelines.processors.base import StageProcessor
 from usagi_agent.pipelines.rules import EndAdapterConfig
@@ -17,7 +20,7 @@ from usagi_agent.pipelines.rules.stage import (
     RuleExecutionError,
     StatePatch,
 )
-from usagi_agent.types.action import FinalAction, ToolAction
+from usagi_agent.types.action import FinalAction
 
 if TYPE_CHECKING:
     from usagi_agent.agents.spec import AgentSpec
@@ -86,106 +89,14 @@ class EndProcessor(StageProcessor):
 
     async def _default_end(self, input: EndRuleInput, context: RunContext) -> EndRuleOutput:
         iteration = input.iteration + 1
-        if input.action_type == "compaction":
-            return EndRuleOutput(
-                pass_disposition="next_pass",
-                iteration=iteration,
-            )
-        if input.action_type == "tool":
-            action = await get_model(
-                self.runtime.persistence.artifact_manager,
-                input.agent_action_ref,
-                ToolAction,
-            )
-            if action is None:
-                return EndRuleOutput(pass_disposition="run_failed", iteration=iteration)
-            decision = await self.runtime.policy_engine.evaluate(
-                principal=context.principal,
-                action="tool.execute",
-                tool_name=action.tool_name,
-                arguments=action.arguments,
-                context=context.to_tool_context(),
-            )
-            if decision.effect == "deny":
-                return EndRuleOutput(pass_disposition="run_failed", iteration=iteration)
-            if decision.effect == "require_approval":
-                approval_id = f"approval_{context.run_id}_{action.tool_call_id}"
-                approval = await self.runtime.persistence.approval_store.get_or_create(
-                    ApprovalTask(
-                        approval_id=approval_id,
-                        run_id=context.run_id,
-                        approval_operation_id=approval_id,
-                        interrupt_id=approval_id,
-                        action_hash=input.action_hash,
-                        approval_scope=("tool.execute", action.tool_name),
-                        tool_name=action.tool_name,
-                        status="pending",
-                        version=0,
-                        created_at=datetime.now(timezone.utc),
-                    )
-                )
-                resumed = interrupt(
-                    {
-                        "kind": "approval",
-                        "approval_id": approval.approval_id,
-                        "approval_version": approval.version,
-                        "approval_scope": approval.approval_scope,
-                        "action_hash": approval.action_hash,
-                        "tool_name": action.tool_name,
-                    }
-                )
-                if not isinstance(resumed, dict) or (
-                    resumed.get("kind") != "approval"
-                    or resumed.get("approval_id") != approval.approval_id
-                    or resumed.get("action_hash") != approval.action_hash
-                    or tuple(resumed.get("approval_scope", ()))
-                    != approval.approval_scope
-                ):
-                    return EndRuleOutput(
-                        pass_disposition="run_failed", iteration=iteration
-                    )
-                decided = await self.runtime.persistence.approval_store.cas_decide(
-                    approval.approval_id,
-                    expected_version=int(
-                        resumed.get("expected_approval_version", -1)
-                    ),
-                    decision=resumed.get("decision", "reject"),
-                    evidence_ref=None,
-                )
-                if decided.status != "approved":
-                    return EndRuleOutput(
-                        pass_disposition="run_failed", iteration=iteration
-                    )
-            observation = await self.runtime.tool_manager.execute(
-                name=action.tool_name,
-                arguments=action.arguments,
-                context=context.to_tool_context(),
-                tool_call_id=action.tool_call_id,
-            )
-            ref = await put_model(
-                self.runtime.persistence.artifact_manager,
-                observation,
-                tenant_id=context.tenant_id,
-                scope_id=context.run_id,
-                operation_id=f"tool:{context.run_id}:{action.tool_call_id}",
-            )
-            await self.runtime.memory_manager.append_event(
-                session_id=context.thread_id,
-                role="tool",
-                content=observation.model_dump_json(),
-                ctx=context.to_tool_context(),
-                metadata={
-                    "tool_name": action.tool_name,
-                    "tool_call_id": action.tool_call_id,
-                },
-            )
-            return EndRuleOutput(
-                pass_disposition=(
-                    "next_pass" if observation.status == "success" else "run_failed"
-                ),
-                iteration=iteration,
-                tool_observation_refs=(ref,),
-            )
+        # A rule or an earlier stage (approval rejection, budget gate) already
+        # decided this pass failed; the router preserves that decision.
+        if input.pass_disposition == "run_failed":
+            return EndRuleOutput(pass_disposition="run_failed", iteration=iteration)
+        if input.action_type in ("tool", "compaction"):
+            # Observations (success or reason-carrying failure) already fed
+            # back through the ResultProcess stage; the model adapts next pass.
+            return EndRuleOutput(pass_disposition="next_pass", iteration=iteration)
         if input.action_type == "final":
             action = await get_model(
                 self.runtime.persistence.artifact_manager,

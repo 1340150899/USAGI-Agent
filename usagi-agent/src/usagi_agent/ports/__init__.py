@@ -14,12 +14,19 @@ from usagi_agent.ports.context import (
 from usagi_agent.ports.memory import (
     MemoryManager,
     MemoryMutationResult,
-    MemoryRecallResult,
 )
 from usagi_agent.ports.model import ModelAdapter
 from usagi_agent.ports.policy import Guardrail, PolicyEngine
-from usagi_agent.ports.tool import ReconcileCapableToolAdapter, RetrieverAdapter
-from usagi_agent.tools.adapter import ToolAdapter
+from usagi_agent.ports.tool import (
+    ExecutableTool,
+    ReconcileCapableToolAdapter,
+    RetrieverAdapter,
+    ToolCatalog,
+    ToolExecutionBackend,
+    ToolRuntime,
+    ToolSelector,
+    ToolSource,
+)
 
 __all__ = [
     "DataAccessContext",
@@ -29,11 +36,15 @@ __all__ = [
     "ToolContext",
     "MemoryManager",
     "MemoryMutationResult",
-    "MemoryRecallResult",
     "ModelAdapter",
     "Guardrail",
     "PolicyEngine",
+    "ExecutableTool",
     "ReconcileCapableToolAdapter",
     "RetrieverAdapter",
-    "ToolAdapter",
+    "ToolCatalog",
+    "ToolExecutionBackend",
+    "ToolRuntime",
+    "ToolSelector",
+    "ToolSource",
 ]

@@ -7,7 +7,8 @@ from usagi_agent.agents import AgentManager, AgentManagerInitializer, AgentSpec
 from usagi_agent.kernel.context import RunContext
 from usagi_agent.models import GLM_5_2_MODEL, ModelSpec
 from usagi_agent.registry import BootstrapSettings
-from usagi_agent.types.model import ModelRequest
+from usagi_agent.types.action import ToolAction
+from usagi_agent.types.model import ModelRequest, ModelResponse, ModelToolCall
 from usagi_agent.types.refs import ArtifactRef, PrincipalRef
 
 
@@ -27,6 +28,13 @@ def test_model_catalog_is_static_and_not_registered_in_agent_manager():
     assert GLM_5_2_MODEL.base_url == "https://open.bigmodel.cn/api/paas/v4/"
     assert not hasattr(manager, "register_model")
     assert not hasattr(manager, "get_model")
+
+
+def test_model_boundary_keeps_raw_calls_until_result_process():
+    assert "context_update" not in ModelResponse.model_fields
+    assert "raw_arguments" in ModelToolCall.model_fields
+    assert "raw_arguments" not in ToolAction.model_fields
+    assert "arguments_error" in ToolAction.model_fields
 
 
 @pytest.mark.asyncio
@@ -74,7 +82,7 @@ async def test_agents_hold_models_and_manager_routes_and_accounts_by_agent():
             request=ModelRequest(
                 messages_ref=ref, context_pack_ref=ref, max_output_tokens=100
             ),
-            context=context,
+            context=context.to_tool_context(),
         )
 
     assert manager.get("a1").model is models[0]

@@ -9,6 +9,7 @@ from typing import cast
 
 from pydantic import BaseModel
 
+from usagi_agent.agents.model_adapters import OpenAICompatibleModelAdapter
 from usagi_agent.models import GLM_5_2_MODEL
 from usagi_agent.kernel.context import RunContext
 from usagi_agent.pipelines import ScenarioPipelineInitializer
@@ -33,15 +34,12 @@ class _VisibleLiveAdapter:
 
     adapter_ref = "usagi.live_smoke_visible_adapter"
 
-    def __init__(self, manager, model_spec) -> None:
-        self._manager = manager
-        self._model_spec = model_spec
+    def __init__(self, model_spec) -> None:
+        self._adapter = OpenAICompatibleModelAdapter(model_spec)
 
     async def generate(self, request, ctx):
         try:
-            return await self._manager._generate_openai_compatible(
-                self._model_spec, request
-            )
+            return await self._adapter.generate(request, ctx)
         except Exception as exc:
             print(
                 json.dumps(
@@ -55,7 +53,10 @@ class _VisibleLiveAdapter:
             raise
 
     async def health(self):
-        return "healthy"
+        return await self._adapter.health()
+
+    async def shutdown(self):
+        await self._adapter.shutdown()
 
 
 async def main() -> None:
@@ -72,16 +73,16 @@ async def main() -> None:
             output_schema="usagi.final_output@1.0.0",
             model=GLM_5_2_MODEL.model_copy(
                 update={
-                    # A deliberately small framework budget triggers the real
-                    # compaction path without sending a large paid request.
-                    "context_window": 1_200,
+                    # A small framework budget triggers the real compaction path,
+                    # while still fitting one prompt-bounded compaction batch.
+                    "context_window": 2_400,
                     "default_max_output_tokens": 512,
                 }
             ),
             allowed_tools=("current_time",),
         )
         runtime.agent_manager.set_model_adapter(
-            _VisibleLiveAdapter(runtime.agent_manager, agent.model)
+            _VisibleLiveAdapter(agent.model)
         )
         ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
         server = Server(runtime)
@@ -120,7 +121,7 @@ async def main() -> None:
         events = await runtime.memory_manager.list_events(
             handle.thread_id, tool_context
         )
-        memories = await runtime.memory_manager.recall(
+        memories = await runtime.memory_manager.get_long_term_memories(
             RecallQuery(query_id="live-smoke", text="current_time"),
             tool_context,
         )
@@ -144,7 +145,7 @@ async def main() -> None:
                         session.compacted_until == session.extracted_until
                         and session.compacted_until is not None
                     ),
-                    "long_term_memory_hits": len(memories.hits),
+                    "long_term_memory_hits": len(memories),
                 },
                 ensure_ascii=False,
             )
@@ -165,7 +166,11 @@ async def main() -> None:
         )
         compaction_tool_context = compaction_context.to_tool_context()
         for role, content in (
-            ("user", "Earlier user details: " + ("B" * 1_200)),
+            (
+                "user",
+                "Stable user preference: always use metric units. "
+                + ("B" * 1_200),
+            ),
             ("assistant", "Earlier assistant analysis: " + ("C" * 1_200)),
             (
                 "user",
@@ -178,7 +183,7 @@ async def main() -> None:
                 content=content,
                 ctx=compaction_tool_context,
             )
-        state: AgentRunState = {}
+        state: AgentRunState = {"context_compaction_mode": "force"}
         state.update(
             cast(
                 AgentRunState,
@@ -236,8 +241,8 @@ async def main() -> None:
         compacted_session = await runtime.memory_manager.get_session_context(
             compaction_context.thread_id, compaction_tool_context
         )
-        compacted_memories = await runtime.memory_manager.recall(
-            RecallQuery(query_id="live-compaction-memory", text="Earlier"),
+        compacted_memories = await runtime.memory_manager.get_long_term_memories(
+            RecallQuery(query_id="live-compaction-memory", text="metric units"),
             compaction_tool_context,
         )
         compacted_final = await get_text(
@@ -260,7 +265,7 @@ async def main() -> None:
                         or compacted_session.facts
                         or compacted_session.goals
                     ),
-                    "long_term_memory_hits": len(compacted_memories.hits),
+                    "long_term_memory_hits": len(compacted_memories),
                 },
                 ensure_ascii=False,
             )
@@ -270,6 +275,8 @@ async def main() -> None:
             raise RuntimeError("live GLM smoke test did not complete")
         if state.get("pass_disposition") != "run_completed":
             raise RuntimeError("live compacted follow-up did not complete")
+        if not compacted_memories:
+            raise RuntimeError("live compaction did not extract durable memory")
 
 
 if __name__ == "__main__":

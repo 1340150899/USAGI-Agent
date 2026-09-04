@@ -77,3 +77,22 @@ class LongTermMemory(BaseModel):
     status: Literal["active", "superseded", "revoked"] = "active"
     valid_from: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     valid_until: datetime | None = None
+
+
+class ToolObservationMemory(BaseModel):
+    """A recallable tool result, stored apart from distilled memories.
+
+    Keyed by (tool, normalized-arguments digest) so repeated identical calls
+    supersede to the freshest result. Lives in its own principal-scoped
+    namespace — never mixed into LongTermMemory.
+    """
+
+    memory_id: str
+    namespace: str
+    key: str
+    tool_name: str
+    arguments_digest: str
+    content: str
+    status: Literal["active", "superseded"] = "active"
+    valid_from: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    source_event_ids: list[str] = Field(default_factory=list)

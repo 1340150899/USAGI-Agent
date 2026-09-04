@@ -1,37 +1,29 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Literal
-
-from pydantic import BaseModel, Field
+from typing import TYPE_CHECKING
 
 from usagi_agent.kernel.context import RunContext
-from usagi_agent.memory.types import ContextPolicy, PreparedContext
-from usagi_agent.pipelines.artifacts import get_text, put_model
+from usagi_agent.memory.tokens import estimate_tokens
+from usagi_agent.memory.types import ContextPolicy, PreparedContext, RawEvent
+from usagi_agent.pipelines.artifacts import (
+    ModelContextEnvelope,
+    RecallBundle,
+    get_model,
+    put_model,
+)
 from usagi_agent.pipelines.config.context_build import ContextBuildPipelineConfig
 from usagi_agent.pipelines.loop.state import AgentRunState
 from usagi_agent.pipelines.processors.base import StageProcessor
 from usagi_agent.pipelines.rules.stage import RuleExecutionError, StatePatch
-from usagi_agent.ports import MemoryRecallResult
 from usagi_agent.prompts import CONTEXT_COMPACTION_PROMPT, prompt_for_agent
-from usagi_agent.tools import to_model_tool
+from usagi_agent.tools import AllowlistSelector, to_model_tool
 from usagi_agent.types.model import ModelRequest
 from usagi_agent.types.refs import ArtifactRef
 
 if TYPE_CHECKING:
     from usagi_agent.agents.spec import AgentSpec
     from usagi_agent.server.runtime import ServerRuntime
-
-
-class ModelContextEnvelope(BaseModel):
-    """Artifact passed from Context Build to Model."""
-
-    operation: Literal["normal", "compaction"] = "normal"
-    messages: list[dict[str, object]] = Field(default_factory=list)
-    recalled_memories: list[object] = Field(default_factory=list)
-    compacted_event_ids: list[str] = Field(default_factory=list)
-    estimated_tokens: int = 0
-    compacted: bool = False
 
 
 class ContextBuildProcessor(StageProcessor):
@@ -43,6 +35,16 @@ class ContextBuildProcessor(StageProcessor):
     ) -> None:
         super().__init__(runtime, agent)
         self.config = config
+        self._tool_selector: AllowlistSelector | None = None
+
+    @property
+    def tool_selector(self) -> AllowlistSelector:
+        """ToolSelector seam (§21.4): v1 serves the allowlist verbatim; swap
+        the implementation to add relevance ranking or token-budget pruning.
+        Built lazily so stage construction never touches runtime state."""
+        if self._tool_selector is None:
+            self._tool_selector = AllowlistSelector(self.runtime.tool_manager)
+        return self._tool_selector
 
     async def process(self, state: AgentRunState, context: RunContext) -> StatePatch:
         recalled_contexts = await self._load_recalled_contexts(state)
@@ -71,44 +73,63 @@ class ContextBuildProcessor(StageProcessor):
             "context_compaction_mode": "auto",
         }
 
-    async def _load_recalled_contexts(self, state: AgentRunState) -> list[object]:
-        memory_ref = state.get("recall_cache", {}).get("long_term_memory")
-        if not memory_ref:
-            return []
-        payload = await get_text(self.runtime.persistence.artifact_manager, memory_ref)
-        recalled = MemoryRecallResult.model_validate_json(payload)
-        return list(recalled.hits)
+    async def _load_recalled_contexts(
+        self, state: AgentRunState
+    ) -> dict[str, list[object]]:
+        """Load every recall source's standard RecallBundle.
+
+        Parsing happens at the Recall stage: every rule emits the same
+        bundle shape, so this loader only deserializes and groups — no
+        per-source logic. (Bundles are artifacts because graph state holds
+        refs only, §8.2.)
+        """
+        groups: dict[str, list[object]] = {}
+        for bundle_ref in (state.get("recall_cache") or {}).values():
+            if not bundle_ref:
+                continue
+            try:
+                bundle = await get_model(
+                    self.runtime.persistence.artifact_manager, bundle_ref, RecallBundle
+                )
+            except Exception:
+                continue
+            if bundle is not None and bundle.hits:
+                groups[bundle.source] = list(bundle.hits)
+        return groups
 
     async def _run_filters(
-        self, recalled_contexts: list[object], context: RunContext
-    ) -> list[object]:
-        remaining = recalled_contexts
-        for rule in self.config.filters:
-            filtered: list[object] = []
-            for recalled_context in remaining:
-                result = await rule.filter_context(
-                    recalled_context, self.runtime, context
-                )
-                if isinstance(result, RuleExecutionError):
-                    self.raise_on_error(result, rule.name)
-                if not isinstance(result, bool):
-                    raise TypeError("context filter must return bool")
-                if not result:
-                    filtered.append(recalled_context)
-            remaining = filtered
-        return remaining
+        self, groups: dict[str, list[object]], context: RunContext
+    ) -> dict[str, list[object]]:
+        result: dict[str, list[object]] = {}
+        for key, items in groups.items():
+            remaining = items
+            for rule in self.config.filters:
+                filtered: list[object] = []
+                for recalled_context in remaining:
+                    outcome = await rule.filter_context(
+                        recalled_context, self.runtime, context
+                    )
+                    if isinstance(outcome, RuleExecutionError):
+                        self.raise_on_error(outcome, rule.name)
+                    if not isinstance(outcome, bool):
+                        raise TypeError("context filter must return bool")
+                    if not outcome:
+                        filtered.append(recalled_context)
+                remaining = filtered
+            if remaining:
+                result[key] = remaining
+        return result
 
     async def _run_rankers(
-        self, recalled_contexts: list[object], context: RunContext
+        self, groups: dict[str, list[object]], context: RunContext
     ) -> None:
-        for rule in self.config.rankers:
-            result = await rule.rank_context(
-                recalled_contexts, self.runtime, context
-            )
-            if isinstance(result, RuleExecutionError):
-                self.raise_on_error(result, rule.name)
-            if result is not None:
-                raise TypeError("context ranker must sort in place and return None")
+        for items in groups.values():
+            for rule in self.config.rankers:
+                result = await rule.rank_context(items, self.runtime, context)
+                if isinstance(result, RuleExecutionError):
+                    self.raise_on_error(result, rule.name)
+                if result is not None:
+                    raise TypeError("context ranker must sort in place and return None")
 
     async def _compress_once(
         self, state: AgentRunState, context: RunContext
@@ -132,7 +153,7 @@ class ContextBuildProcessor(StageProcessor):
     async def _build_prompt(
         self,
         prepared: PreparedContext,
-        recalled_contexts: list[object],
+        recalled_groups: dict[str, list[object]],
         context: RunContext,
     ) -> tuple[str, str]:
         prompt = prompt_for_agent(self.agent.id)
@@ -161,20 +182,26 @@ class ContextBuildProcessor(StageProcessor):
                 }
             )
         messages.extend(self._event_to_message(event) for event in prepared.recent_events)
-        if recalled_contexts:
+        grouped_payload = {
+            key: items for key, items in recalled_groups.items() if items
+        }
+        if grouped_payload:
             messages.insert(
                 0,
                 {
                     "role": "system",
-                    "content": "Relevant long-term memory:\n"
-                    + json.dumps(
-                        recalled_contexts, ensure_ascii=False, default=str
-                    ),
+                    "content": "Recalled context:\n"
+                    + json.dumps(grouped_payload, ensure_ascii=False, default=str),
                 },
             )
+        flat_recalled: list[object] = [
+            {"source": key, "item": item}
+            for key, items in recalled_groups.items()
+            for item in items
+        ]
         envelope = ModelContextEnvelope(
             messages=messages,
-            recalled_memories=recalled_contexts,
+            recalled_memories=flat_recalled,
             estimated_tokens=prepared.estimated_tokens,
             compacted=prepared.compacted,
         )
@@ -196,8 +223,9 @@ class ContextBuildProcessor(StageProcessor):
             messages=envelope.messages,
             tools=[
                 to_model_tool(spec)
-                for spec in self.runtime.tool_manager.get_specs(
-                    self.agent.allowed_tools
+                for spec in await self.tool_selector.select(
+                    self.agent.allowed_tools,
+                    token_budget=max(1, model.context_window // 8),
                 )
             ],
             max_output_tokens=model.default_max_output_tokens,
@@ -216,26 +244,8 @@ class ContextBuildProcessor(StageProcessor):
         prepared: PreparedContext,
         context: RunContext,
     ) -> tuple[str, str]:
-        session = prepared.session
-        payload = {
-            "previous_context": {
-                "summary": session.summary,
-                "facts": session.facts,
-                "constraints": session.constraints,
-                "goals": session.goals,
-                "open_tasks": session.open_tasks,
-                "artifacts": session.artifacts,
-            },
-            "events_to_compact": [
-                {
-                    "event_id": event.event_id,
-                    "role": event.role,
-                    "content": event.content,
-                    "metadata": event.metadata,
-                }
-                for event in prepared.events_to_compact
-            ],
-        }
+        events_to_compact = self._fit_compaction_batch(prepared)
+        payload = self._compaction_payload(prepared, events_to_compact)
         messages: list[dict[str, object]] = [
             {
                 "role": "user",
@@ -245,12 +255,10 @@ class ContextBuildProcessor(StageProcessor):
         envelope = ModelContextEnvelope(
             operation="compaction",
             messages=messages,
-            compacted_event_ids=[
-                event.event_id for event in prepared.events_to_compact
-            ],
-            estimated_tokens=prepared.estimated_tokens,
+            compacted_event_ids=[event.event_id for event in events_to_compact],
+            estimated_tokens=self._compaction_input_tokens(payload),
         )
-        operation_suffix = prepared.events_to_compact[-1].event_id
+        operation_suffix = events_to_compact[-1].event_id
         context_pack_ref = await put_model(
             self.runtime.persistence.artifact_manager,
             envelope,
@@ -278,6 +286,72 @@ class ContextBuildProcessor(StageProcessor):
             operation_id=f"model-request-compaction:{context.run_id}:{operation_suffix}",
         )
         return context_pack_ref, model_request_ref
+
+    @staticmethod
+    def _compaction_payload(
+        prepared: PreparedContext, events_to_compact: list[RawEvent]
+    ) -> dict[str, object]:
+        session = prepared.session
+        return {
+            "previous_context": {
+                "summary": session.summary,
+                "facts": session.facts,
+                "constraints": session.constraints,
+                "goals": session.goals,
+                "open_tasks": session.open_tasks,
+                "artifacts": session.artifacts,
+            },
+            "events_to_compact": [
+                {
+                    "event_id": event.event_id,
+                    "role": event.role,
+                    "content": event.content,
+                    "metadata": event.metadata,
+                }
+                for event in events_to_compact
+            ],
+        }
+
+    @staticmethod
+    def _compaction_input_tokens(payload: dict[str, object]) -> int:
+        return (
+            estimate_tokens(CONTEXT_COMPACTION_PROMPT.render())
+            + estimate_tokens(json.dumps(payload, ensure_ascii=False))
+            + 32
+        )
+
+    def _fit_compaction_batch(self, prepared: PreparedContext) -> list[RawEvent]:
+        """Select the oldest event-boundary prefix that fits one model request."""
+        input_budget = (
+            self.agent.model.context_window
+            - self.agent.model.default_max_output_tokens
+        )
+        batch: list[RawEvent] = []
+        for event in prepared.events_to_compact:
+            candidate = [*batch, event]
+            payload = self._compaction_payload(prepared, candidate)
+            if self._compaction_input_tokens(payload) > input_budget:
+                break
+            batch = candidate
+
+        if not batch:
+            raise RuntimeError(
+                "context compaction input exceeds the model window before the "
+                "first event; reduce the event size or use a larger-context model"
+            )
+
+        # Do not leave a tool result at the head of the next batch. Move its
+        # assistant tool-call event with it when a budget boundary splits the pair.
+        while (
+            len(batch) < len(prepared.events_to_compact)
+            and prepared.events_to_compact[len(batch)].role == "tool"
+        ):
+            batch.pop()
+            if not batch:
+                raise RuntimeError(
+                    "one assistant tool-call group exceeds the compaction input budget"
+                )
+        return batch
 
     @staticmethod
     def _event_to_message(event) -> dict[str, object]:

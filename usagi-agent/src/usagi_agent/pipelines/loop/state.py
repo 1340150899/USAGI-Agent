@@ -30,12 +30,16 @@ class AgentRunState(TypedDict, total=False):
     action_type: str
     action_hash: str
     agent_action_ref: str
+    # Per-pass list of tool action artifact ids; overwritten every pass so a
+    # later pass can never replay the previous pass's actions.
+    tool_action_refs: Annotated[list[str], last_write]
     # Pass result + loop control
     pass_disposition: Annotated[str, last_write]
     pass_result_ref: str
     iteration: Annotated[int, last_write]
     tool_call_count: Annotated[int, last_write]
     delegation_count: Annotated[int, last_write]
+    reason_codes: Annotated[list[str], append_dedup]
     # Accumulated outputs (dedup by id)
     tool_observation_refs: Annotated[list[str], append_dedup]
     final_output_ref: str

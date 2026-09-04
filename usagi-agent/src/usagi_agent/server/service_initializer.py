@@ -11,8 +11,7 @@ from usagi_agent.pipelines.compiler import PipelineCompiler
 from usagi_agent.policies.engine import DefaultGuardrail, DefaultPolicyEngine
 from usagi_agent.scenarios import ScenarioRuntimeRegistry
 from usagi_agent.server.runtime import ServerRuntime
-from usagi_agent.tools import ToolManager
-from usagi_agent.tools.builtin import builtin_tools
+from usagi_agent.tools import ToolInitializer
 
 
 class ServiceRuntimeInitializer:
@@ -22,10 +21,7 @@ class ServiceRuntimeInitializer:
             settings.require_durable()
         observability = ObservabilityInitializer.init(settings)
         persistence = PersistenceInitializer.init(settings, observability)
-        tool_manager = ToolManager()
-        tool_manager.register_many(
-            builtin_tools(persistence.artifact_manager, persistence.artifact_metadata_store)
-        )
+        tool_manager = ToolInitializer.init(persistence)
         memory_manager = DefaultMemoryManager(path=settings.memory_path)
         policy_engine = DefaultPolicyEngine()
         guardrail = DefaultGuardrail()

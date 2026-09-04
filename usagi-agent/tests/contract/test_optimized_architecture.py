@@ -42,11 +42,20 @@ class _HealthFailureProbe:
 
 
 def test_tool_spec_is_the_minimal_function_contract():
-    assert set(ToolSpec.model_fields) == {"name", "description", "parameters"}
+    # The model-facing contract stays three fields; the extra ToolSpec fields
+    # are execution metadata consumed by ToolRuntime, never by the model.
     spec = SearchToolAdapter.spec
     function = to_model_tool(spec)["function"]
     assert isinstance(function, dict)
+    assert set(function) == {"name", "description", "parameters"}
     assert function["name"] == "web_search"
+    for field in (
+        "risk", "write_safety", "timeout_seconds", "max_concurrency",
+        "max_retries", "retry_backoff_seconds", "max_output_bytes",
+        "adapter_kind", "execution_env", "required_scopes",
+    ):
+        assert field in ToolSpec.model_fields
+    assert ToolSpec(name="t", description="d").risk == "read"
 
 
 def test_service_init_registers_only_builtins_and_does_not_compile_scenarios():

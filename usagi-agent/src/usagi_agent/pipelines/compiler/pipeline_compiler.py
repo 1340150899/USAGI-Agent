@@ -23,7 +23,6 @@ def _wrap_stage(
     runtime: "ServerRuntime",
     *,
     budget,
-    limits: tuple[int, int] | None = None,
 ) -> Callable[..., Awaitable[dict]]:
     async def node(state: AgentRunState, config: RunnableConfig) -> dict:
         context = RunContext.from_graph_config(config)
@@ -37,23 +36,9 @@ def _wrap_stage(
                 context.deadline,
                 budget,
             )
-        tool_count = state.get("tool_call_count", 0)
-        delegation_count = state.get("delegation_count", 0)
-        if limits is not None:
-            if state.get("action_type") == "tool" and tool_count >= limits[0]:
-                return {"pass_disposition": "run_failed"}
-            if state.get("action_type") == "delegate" and delegation_count >= limits[1]:
-                return {"pass_disposition": "run_failed"}
         result = await process(state, context)
         if not isinstance(result, dict):
             raise TypeError("pipeline stage must return dict")
-        if limits is not None:
-            if state.get("action_type") == "tool":
-                tool_count += 1
-                result["tool_call_count"] = tool_count
-            elif state.get("action_type") == "delegate":
-                delegation_count += 1
-                result["delegation_count"] = delegation_count
         return result
 
     return node
@@ -82,14 +67,9 @@ class PipelineCompiler:
         )
         graph: StateGraph = StateGraph(self._state_schema)
         for name, method in stages:
-            limits = (
-                (pipeline.max_tool_calls, pipeline.max_delegations)
-                if name == "end"
-                else None
-            )
-            graph.add_node(
-                name, _wrap_stage(method, runtime, budget=pipeline.budget, limits=limits)
-            )
+            # Tool-call budget enforcement lives inside the ResultProcess
+            # stage (after action formation, before execution).
+            graph.add_node(name, _wrap_stage(method, runtime, budget=pipeline.budget))
         graph.add_edge(START, stages[0][0])
         for (source, _), (target, _) in zip(stages, stages[1:]):
             graph.add_edge(source, target)

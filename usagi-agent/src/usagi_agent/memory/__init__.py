@@ -3,8 +3,9 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from usagi_agent.memory.manager import DefaultMemoryManager
+    from usagi_agent.memory.store import MemoryStores
 
-__all__ = ["DefaultMemoryManager"]
+__all__ = ["DefaultMemoryManager", "MemoryStores"]
 
 
 def __getattr__(name: str):
@@ -12,4 +13,8 @@ def __getattr__(name: str):
         from usagi_agent.memory.manager import DefaultMemoryManager
 
         return DefaultMemoryManager
+    if name == "MemoryStores":
+        from usagi_agent.memory.store import MemoryStores
+
+        return MemoryStores
     raise AttributeError(name)

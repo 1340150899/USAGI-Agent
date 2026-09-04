@@ -37,7 +37,10 @@ class PipelineProcessor:
         )
         self._model = ModelProcessor(pipeline.model, runtime, agent)
         self._result_process = ResultProcessProcessor(
-            pipeline.result_process, runtime, agent
+            pipeline.result_process,
+            runtime,
+            agent,
+            max_tool_calls=pipeline.max_tool_calls,
         )
         self._end = EndProcessor(pipeline.end, runtime, agent)
 

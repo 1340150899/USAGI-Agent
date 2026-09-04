@@ -33,6 +33,9 @@ class ToolExecutionRecord(BaseModel):
     adoption_status: AdoptionStatus = "pending"
     attempt: int = 0
     generation: int = 0
+    # Persisted observation artifact id; lets replay return the settled result
+    # instead of re-executing after a crash or interrupt resume.
+    observation_ref: str | None = None
     settlement_permit_digest: str | None = None
     quarantine_receipt_ref: SettlementArtifactRef | None = None
     created_at: datetime

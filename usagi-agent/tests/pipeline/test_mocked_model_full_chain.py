@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic import BaseModel
 
@@ -11,10 +13,7 @@ from usagi_agent.pipelines.config.stage_config import SCENARIO_CONFIGS
 from usagi_agent.registry import BootstrapSettings
 from usagi_agent.server import Server, ServiceRuntimeInitializer
 from usagi_agent.tools import ToolAdapter, ToolSpec
-from usagi_agent.types.action import ToolAction
-from usagi_agent.types.context import ContextUpdate
-from usagi_agent.types.model import ModelRequest, ModelResponse, ModelUsage
-from usagi_agent.types.refs import ArtifactRef
+from usagi_agent.types.model import ModelRequest, ModelResponse, ModelToolCall, ModelUsage
 from usagi_agent.types.run import RunOptions, RunStartRequest
 
 
@@ -59,25 +58,21 @@ class _ProtocolCheckingModel:
         self.requests.append(request)
         call_number = len(self.requests)
         if call_number == 1:
-            assert request.prompt_ref != "usagi.context_compaction_prompt@1.0.0"
+            assert request.prompt_ref != "usagi.context_compaction_prompt@1.1.0"
             assert request.tools
             return ModelResponse(
-                content_ref=ArtifactRef(
-                    artifact_id="unpersisted:tool-call",
-                    content_type="text/plain",
-                ),
                 tool_calls=[
-                    ToolAction(
+                    ModelToolCall(
                         tool_name="web_search",
                         tool_call_id="mock-call-1",
-                        arguments={"query": "mock query"},
+                        raw_arguments=json.dumps({"query": "mock query"}),
                     )
                 ],
                 finish_reason="tool_use",
                 usage=ModelUsage(input_tokens=10, output_tokens=5),
             )
         if call_number == 2:
-            assert request.prompt_ref != "usagi.context_compaction_prompt@1.0.0"
+            assert request.prompt_ref != "usagi.context_compaction_prompt@1.1.0"
             assistant_calls = [
                 message
                 for message in request.messages
@@ -98,14 +93,17 @@ class _ProtocolCheckingModel:
             assert first_call["id"] == "mock-call-1"
             assert tool_results[0]["tool_call_id"] == "mock-call-1"
             return ModelResponse(
-                content_ref=ArtifactRef(
-                    artifact_id="unpersisted:final",
-                    content_type="text/plain",
-                ),
-                content="mock final answer",
-                context_update=ContextUpdate(
-                    open_tasks=[],
-                    summary="Mocked research completed.",
+                content=json.dumps(
+                    {
+                        "answer": "mock final answer",
+                        "context_update": {
+                            "open_tasks": [],
+                            "summary": "Mocked research completed.",
+                            # Provider drift in optional state must not prevent
+                            # ResultProcess from extracting a valid answer.
+                            "facts": ["invalid shape"],
+                        },
+                    }
                 ),
                 usage=ModelUsage(input_tokens=10, output_tokens=5),
             )
@@ -156,7 +154,7 @@ async def test_mocked_model_runs_tool_protocol_and_final_answer(tmp_path):
     assert search.calls == 1
     assert len(model.requests) == 2
     assert [
-        request.prompt_ref == "usagi.context_compaction_prompt@1.0.0"
+        request.prompt_ref == "usagi.context_compaction_prompt@1.1.0"
         for request in model.requests
     ] == [False, False]
 
@@ -179,4 +177,5 @@ async def test_mocked_model_runs_tool_protocol_and_final_answer(tmp_path):
     )
     assert session.compacted_until is None
     assert session.open_tasks == []
+    assert session.summary == ""
     await server.shutdown()

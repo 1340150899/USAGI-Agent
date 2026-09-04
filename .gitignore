@@ -33,3 +33,5 @@ usagi-agent/.usagi/
 *.bak
 .DS_Store
 Thumbs.db
+# pytest basetemp workaround (Windows temp perms)
+.pytest-tmp/

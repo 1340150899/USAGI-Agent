@@ -2,13 +2,9 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict, Field
 
-from usagi_agent.types.action import ToolAction
 from usagi_agent.types.refs import ArtifactRef
-from usagi_agent.types.context import ContextUpdate
 
 
 class ModelUsage(BaseModel):
@@ -44,10 +40,19 @@ class ModelRequest(BaseModel):
     structured_output: bool = True
 
 
+class ModelToolCall(BaseModel):
+    """Provider-neutral, unparsed tool call returned by a model adapter."""
+
+    tool_name: str
+    tool_call_id: str
+    raw_arguments: str = "{}"
+
+
 class ModelResponse(BaseModel):
-    content_ref: ArtifactRef
-    tool_calls: list[ToolAction] = Field(default_factory=list)
-    finish_reason: Literal["stop", "tool_use", "length", "error"] = "stop"
+    """Serializable raw model result; interpretation belongs to ResultProcess."""
+
+    content_ref: ArtifactRef | None = None
+    tool_calls: list[ModelToolCall] = Field(default_factory=list)
+    finish_reason: str | None = None
     usage: ModelUsage = Field(default_factory=ModelUsage)
     content: str | None = None
-    context_update: ContextUpdate | None = None

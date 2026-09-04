@@ -67,7 +67,7 @@ class ModelProcessor(StageProcessor):
         response = await self.runtime.agent_manager.generate(
             agent_id=self.agent.id,
             request=request,
-            context=context,
+            context=context.to_tool_context(),
         )
         if response.content is not None:
             content_ref = await put_bytes(

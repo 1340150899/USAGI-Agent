@@ -1,8 +1,8 @@
 """AgentAction + PassResult + ToolObservation (design §19.3, §20.3, §21.6).
 
-The model only *proposes* an AgentAction; the EndRule executes it after Policy/Approval.
-AgentAction and PassResult are persisted as Artifacts; State only keeps their Refs and
-low-sensitivity ``action_type``/``disposition``/``reason_codes``.
+ResultProcess interprets the raw model response and forms AgentActions. Framework
+ResultProcess rules govern executable actions; End only routes the resulting pass.
+Artifacts hold payloads while State keeps refs and low-sensitivity classifications.
 """
 from __future__ import annotations
 
@@ -38,6 +38,9 @@ class ToolAction(BaseModel):
     tool_name: str
     tool_call_id: str
     arguments: dict[str, object] = Field(default_factory=dict)
+    # ResultProcess records malformed provider arguments here. Execution rules
+    # turn the formed error into model-visible feedback without reparsing input.
+    arguments_error: str | None = None
     rationale: str | None = None
 
 

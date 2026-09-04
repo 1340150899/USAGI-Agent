@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import threading
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -20,6 +21,33 @@ from langgraph.store.base import (
     SearchItem,
     SearchOp,
 )
+
+
+@dataclass(frozen=True)
+class MemoryStores:
+    """Physically separate stores for each memory lifecycle."""
+
+    raw_conversations: BaseStore
+    short_term: BaseStore
+    long_term: BaseStore
+    tool_observations: BaseStore
+
+    @classmethod
+    def json_files(cls, path: str | Path) -> "MemoryStores":
+        """Create four sibling JSON files from the configured base path."""
+        base = Path(path)
+        suffix = base.suffix or ".json"
+        stem = base.stem if base.suffix else base.name
+
+        def sibling(layer: str) -> Path:
+            return base.with_name(f"{stem}.{layer}{suffix}")
+
+        return cls(
+            raw_conversations=JsonFileStore(sibling("raw")),
+            short_term=JsonFileStore(sibling("short")),
+            long_term=JsonFileStore(sibling("long")),
+            tool_observations=JsonFileStore(sibling("tools")),
+        )
 
 
 def _matches(value: dict[str, Any], filters: dict[str, Any] | None) -> bool:
@@ -143,4 +171,3 @@ class JsonFileStore(BaseStore):
 
     async def abatch(self, ops: Iterable[Op]) -> list[Result]:
         return await asyncio.to_thread(self.batch, list(ops))
-

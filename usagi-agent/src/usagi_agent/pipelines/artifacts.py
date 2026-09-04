@@ -2,14 +2,56 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import TypeVar
+from typing import Literal, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from usagi_agent.persistence.ports.artifact import ArtifactManager
 from usagi_agent.types.refs import ArtifactOwner, ArtifactRef
 
 T = TypeVar("T", bound=BaseModel)
+
+
+class ModelContextEnvelope(BaseModel):
+    """Artifact passed from Context Build to Model (and back to ResultProcess)."""
+
+    operation: Literal["normal", "compaction"] = "normal"
+    messages: list[dict[str, object]] = Field(default_factory=list)
+    recalled_memories: list[object] = Field(default_factory=list)
+    compacted_event_ids: list[str] = Field(default_factory=list)
+    estimated_tokens: int = 0
+    compacted: bool = False
+
+
+class RecallBundle(BaseModel):
+    """The one canonical recall-stage output artifact.
+
+    Every recall rule serializes its hits into this shape at the Recall stage;
+    ContextBuild only deserializes RecallBundle — no per-source parsing.
+    (Parsed candidate content cannot live in graph state, which holds refs
+    only per §8.2, so the bundle artifact IS the handoff contract.)
+    """
+
+    source: str
+    hits: list[dict[str, object]] = Field(default_factory=list)
+
+
+async def put_recall_bundle(
+    manager: ArtifactManager,
+    *,
+    source: str,
+    hits: list[dict[str, object]],
+    tenant_id: str,
+    scope_id: str,
+    run_id: str,
+) -> str:
+    return await put_model(
+        manager,
+        RecallBundle(source=source, hits=hits),
+        tenant_id=tenant_id,
+        scope_id=scope_id,
+        operation_id=f"recall:{source}:{run_id}",
+    )
 
 
 async def put_model(

@@ -7,9 +7,8 @@ from pathlib import Path
 from typing import Iterable
 from uuid import uuid4
 
-from langgraph.store.base import BaseStore
-
-from usagi_agent.memory.store import JsonFileStore
+from usagi_agent.memory.store import MemoryStores
+from usagi_agent.memory.tokens import estimate_tokens
 from usagi_agent.memory.types import (
     ContextPolicy,
     LongTermMemory,
@@ -18,27 +17,28 @@ from usagi_agent.memory.types import (
     PreparedContext,
     RawEvent,
     SessionContext,
+    ToolObservationMemory,
 )
-from usagi_agent.ports import HealthStatus, MemoryMutationResult, MemoryRecallResult, ToolContext
-from usagi_agent.types.context import RecallQuery
+from usagi_agent.ports import HealthStatus, MemoryMutationResult, ToolContext
+from usagi_agent.types.context import LongTermMemoryCandidate, RecallQuery
 from usagi_agent.types.policy import MemoryCandidate
 from usagi_agent.types.refs import MemoryRef
-
-
-def estimate_tokens(text: str) -> int:
-    """Conservative tokenizer-independent pre-call estimate."""
-    return max(1, (len(text.encode("utf-8")) + 2) // 3)
-
 
 class DefaultMemoryManager:
     """Owns raw events, session context, compaction, extraction and recall.
 
-    Pipeline code calls this facade and never implements memory algorithms. The injected
-    store is LangGraph's BaseStore; V1 defaults to a local JSON implementation.
+    Pipeline code calls this facade and never implements memory algorithms. Each
+    lifecycle has its own BaseStore so raw transcripts cannot accidentally become a
+    recall source or be mixed with compacted state.
     """
 
-    def __init__(self, store: BaseStore | None = None, *, path: str | Path = ".usagi/memory.json") -> None:
-        self.store = store or JsonFileStore(path)
+    def __init__(
+        self,
+        stores: MemoryStores | None = None,
+        *,
+        path: str | Path = ".usagi/memory.json",
+    ) -> None:
+        self.stores = stores or MemoryStores.json_files(path)
 
     @staticmethod
     def _identity(ctx: ToolContext) -> tuple[str, str]:
@@ -46,14 +46,16 @@ class DefaultMemoryManager:
         return execution.tenant_id, execution.principal.principal_opaque_id
 
     def _events_ns(self, session_id: str, ctx: ToolContext) -> tuple[str, ...]:
-        return ("events", self._identity(ctx)[0], session_id)
+        tenant_id, principal_id = self._identity(ctx)
+        return ("raw_conversations", tenant_id, principal_id, session_id)
 
     def _session_ns(self, session_id: str, ctx: ToolContext) -> tuple[str, ...]:
-        return ("sessions", self._identity(ctx)[0], session_id)
+        tenant_id, principal_id = self._identity(ctx)
+        return ("short_term_memory", tenant_id, principal_id, session_id)
 
     def _memory_ns(self, ctx: ToolContext) -> tuple[str, ...]:
         tenant_id, principal_id = self._identity(ctx)
-        return ("memories", tenant_id, principal_id)
+        return ("long_term_memory", tenant_id, principal_id)
 
     async def append_event(
         self, *, session_id: str, role: str, content: str, ctx: ToolContext,
@@ -63,7 +65,7 @@ class DefaultMemoryManager:
             event_id=f"event_{uuid4().hex}", session_id=session_id,
             role=role, content=content, metadata=metadata or {},  # type: ignore[arg-type]
         )
-        await self.store.aput(
+        await self.stores.raw_conversations.aput(
             self._events_ns(session_id, ctx), event.event_id,
             event.model_dump(mode="json"), index=["content"],
         )
@@ -73,20 +75,24 @@ class DefaultMemoryManager:
         return event
     
     async def list_events(self, session_id: str, ctx: ToolContext) -> list[RawEvent]:
-        items = await self.store.asearch(self._events_ns(session_id, ctx), limit=100_000)
+        items = await self.stores.raw_conversations.asearch(
+            self._events_ns(session_id, ctx), limit=100_000
+        )
         return sorted(
             (RawEvent.model_validate(item.value) for item in items),
             key=lambda event: event.created_at,
         )
 
     async def get_session_context(self, session_id: str, ctx: ToolContext) -> SessionContext:
-        item = await self.store.aget(self._session_ns(session_id, ctx), "context")
+        item = await self.stores.short_term.aget(
+            self._session_ns(session_id, ctx), "context"
+        )
         return SessionContext.model_validate(item.value) if item else SessionContext()
 
     async def save_session_context(
         self, session_id: str, session: SessionContext, ctx: ToolContext
     ) -> None:
-        await self.store.aput(
+        await self.stores.short_term.aput(
             self._session_ns(session_id, ctx), "context",
             session.model_dump(mode="json"), index=False,
         )
@@ -182,9 +188,16 @@ class DefaultMemoryManager:
         session_id: str,
         event_ids: list[str],
         ctx: ToolContext,
+        *,
+        memory_candidates: list[LongTermMemoryCandidate] | None = None,
         **updates: object,
     ) -> SessionContext:
-        """Persist an LLM compaction result and extract evicted raw events to memory."""
+        """Apply a short-term replacement and explicit durable candidates.
+
+        Summary and structured state replace the model-visible working set;
+        they are not long-term memories. Only separately selected candidates
+        enter the principal-scoped long-term store.
+        """
         session = await self.get_session_context(session_id, ctx)
         selected = set(event_ids)
         events = [
@@ -201,14 +214,43 @@ class DefaultMemoryManager:
         if events:
             checkpoint = events[-1].event_id
             session.compacted_until = checkpoint
-            await self._extract_events(
-                events,
-                self._memory_ns(ctx),
-                MemoryExtractionTrigger.CONTEXT_COMPACTION,
+            await self._persist_compaction_memory(
+                events, memory_candidates or [], ctx
             )
             session.extracted_until = checkpoint
         await self.save_session_context(session_id, session, ctx)
         return session
+
+    async def _persist_compaction_memory(
+        self,
+        events: list[RawEvent],
+        memory_candidates: list[LongTermMemoryCandidate],
+        ctx: ToolContext,
+    ) -> None:
+        """Persist only LLM-selected cross-session memory candidates.
+
+        Content-derived keys deduplicate durable knowledge across batches and
+        sessions; source IDs preserve provenance to the compacted raw range.
+        """
+        provenance = [event.event_id for event in events]
+        for candidate in memory_candidates:
+            content = candidate.content.strip()
+            if not content:
+                continue
+            digest = hashlib.sha256(content.encode()).hexdigest()[:24]
+            await self.put(
+                LongTermMemory(
+                    memory_id=f"memory_{uuid4().hex}",
+                    namespace="",  # put() normalizes this
+                    key=f"compaction-extract:{digest}",
+                    content=content,
+                    type=candidate.type,
+                    confidence=candidate.confidence,
+                    importance=candidate.importance,
+                    source_event_ids=provenance,
+                ),
+                ctx,
+            )
 
     async def apply_context_update(
         self, session_id: str, ctx: ToolContext, **updates: object
@@ -221,17 +263,63 @@ class DefaultMemoryManager:
         await self.save_session_context(session_id, session, ctx)
         return session
 
-    async def recall(self, query: RecallQuery, ctx: ToolContext) -> MemoryRecallResult:
-        hits = await self.store.asearch(
+    async def get_long_term_memories(
+        self, query: RecallQuery, ctx: ToolContext
+    ) -> list[LongTermMemory]:
+        """Search distilled long-term memories (cross-session, principal-scoped).
+
+        "Recall" is a pipeline-stage concept; the memory domain exposes plain
+        getters — the Recall stage's rules call this one.
+        """
+        hits = await self.stores.long_term.asearch(
             self._memory_ns(ctx), query=query.text, filter={"status": "active"}, limit=10
         )
-        return MemoryRecallResult(
-            hits=[LongTermMemory.model_validate(hit.value) for hit in hits], reason_codes=[]
+        return [LongTermMemory.model_validate(hit.value) for hit in hits]
+
+    def _tool_observation_ns(self, ctx: ToolContext) -> tuple[str, ...]:
+        tenant_id, principal_id = self._identity(ctx)
+        return ("tool_observations", tenant_id, principal_id)
+
+    async def put_tool_observation(
+        self, record: ToolObservationMemory, ctx: ToolContext
+    ) -> ToolObservationMemory:
+        """Persist a tool result candidate; same key supersedes to the freshest."""
+        namespace = self._tool_observation_ns(ctx)
+        record = record.model_copy(update={"namespace": "/".join(namespace)})
+        existing = await self.stores.tool_observations.asearch(
+            namespace, filter={"key": record.key, "status": "active"}, limit=100
         )
+        for item in existing:
+            previous = ToolObservationMemory.model_validate(item.value)
+            if previous.content == record.content:
+                return previous
+            previous.status = "superseded"
+            previous.valid_from = record.valid_from
+            await self.stores.tool_observations.aput(
+                namespace, previous.memory_id, previous.model_dump(mode="json")
+            )
+        await self.stores.tool_observations.aput(
+            namespace, record.memory_id, record.model_dump(mode="json"),
+            index=["content", "key"],
+        )
+        return record
+
+    async def get_tool_observations(
+        self, query: RecallQuery, ctx: ToolContext, *, limit: int = 10
+    ) -> list[ToolObservationMemory]:
+        """Search reusable tool results by relevance (cross-session)."""
+        hits = await self.stores.tool_observations.asearch(
+            self._tool_observation_ns(ctx),
+            query=query.text,
+            filter={"status": "active"},
+            limit=limit,
+        )
+        return [ToolObservationMemory.model_validate(hit.value) for hit in hits]
 
     async def put(self, memory: LongTermMemory, ctx: ToolContext) -> LongTermMemory:
         namespace = self._memory_ns(ctx)
-        existing = await self.store.asearch(
+        memory = memory.model_copy(update={"namespace": "/".join(namespace)})
+        existing = await self.stores.long_term.asearch(
             namespace, filter={"key": memory.key, "status": "active"}, limit=100
         )
         for item in existing:
@@ -240,8 +328,10 @@ class DefaultMemoryManager:
                 return previous
             previous.status = "superseded"
             previous.valid_until = memory.valid_from
-            await self.store.aput(namespace, previous.memory_id, previous.model_dump(mode="json"))
-        await self.store.aput(
+            await self.stores.long_term.aput(
+                namespace, previous.memory_id, previous.model_dump(mode="json")
+            )
+        await self.stores.long_term.aput(
             namespace, memory.memory_id, memory.model_dump(mode="json"), index=["content", "key"]
         )
         return memory
@@ -268,10 +358,13 @@ class DefaultMemoryManager:
         result: list[LongTermMemory] = []
         for event in events:
             content = event.content.strip()
-            if not content or event.role == "system":
+            if not content or event.role in ("system", "tool"):
+                # Tool events are persisted as dedicated tool_observation
+                # candidates by ToolExecutionRule; extracting them here too
+                # would double-record the same content.
                 continue
             key = "event:" + hashlib.sha256(content.encode()).hexdigest()[:24]
-            related = await self.store.asearch(
+            related = await self.stores.long_term.asearch(
                 namespace, filter={"key": key, "status": "active"}, limit=1
             )
             if related:
@@ -283,7 +376,7 @@ class DefaultMemoryManager:
                 confidence=0.7 if trigger == MemoryExtractionTrigger.CONTEXT_COMPACTION else 0.9,
                 source_event_ids=[event.event_id],
             )
-            await self.store.aput(
+            await self.stores.long_term.aput(
                 namespace, memory.memory_id, memory.model_dump(mode="json"), index=["content"]
             )
             result.append(memory)
@@ -302,17 +395,25 @@ class DefaultMemoryManager:
 
     async def revoke(self, memory_id: str, ctx: ToolContext) -> MemoryMutationResult:
         namespace = self._memory_ns(ctx)
-        item = await self.store.aget(namespace, memory_id)
+        item = await self.stores.long_term.aget(namespace, memory_id)
         if item is None:
             return MemoryMutationResult(status="unknown")
         memory = LongTermMemory.model_validate(item.value)
         memory.status = "revoked"
-        await self.store.aput(namespace, memory_id, memory.model_dump(mode="json"))
+        await self.stores.long_term.aput(
+            namespace, memory_id, memory.model_dump(mode="json")
+        )
         return MemoryMutationResult(status="applied", memory_ref=MemoryRef(memory_id))
 
     async def health(self) -> HealthStatus:
         try:
-            await self.store.alist_namespaces(limit=1)
+            for store in (
+                self.stores.raw_conversations,
+                self.stores.short_term,
+                self.stores.long_term,
+                self.stores.tool_observations,
+            ):
+                await store.alist_namespaces(limit=1)
         except Exception:
             return "unhealthy"
         return "healthy"

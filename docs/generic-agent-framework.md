@@ -99,7 +99,7 @@ AgentSpec 是不可变配置。运行中的数据进入 WorkflowState、AgentLoo
 
 ### 3.5 Tool 发现与执行分离
 
-RecallSourcesRule 只召回 Tool 名称、说明和 Schema，不执行任何 Tool。由 Agent 提出的 ToolAction 只能在 EndRule 中经过权限、Policy、审批和幂等后执行。Memory、RAG 和业务查询如果需要在 RecallSourcesRule 中直接获取候选，必须实现 Retriever Port，而不能伪装成 Tool 绕过 EndRule。
+RecallSourcesRule 只召回 Tool 名称、说明和 Schema，不执行任何 Tool。由 Agent 提出的 ToolAction 只能在 ResultProcess 阶段的 ToolExecutionRule 中经过权限、Policy、审批和幂等后执行。Memory、RAG 和业务查询如果需要在 RecallSourcesRule 中直接获取候选，必须实现 Retriever Port，而不能伪装成 Tool 绕过执行治理。
 
 ### 3.6 Checkpoint 与长期 Memory 分离
 
@@ -192,7 +192,7 @@ class RecallBudget(BaseModel):
     parallel_sources: int = 1
 
 class ContextBudget(BaseModel):
-    """ContextBuildRule 的 token 预算，由 AgentManager 按模型窗口、PromptBudgetProfile 与输出上限预留计算。"""
+    """ContextBuildRule 按模型窗口、PromptBudgetProfile 与输出上限计算并消费的 token 预算。"""
     total_tokens: int
     system_prompt_tokens: int
     tool_schema_tokens: int
@@ -272,7 +272,7 @@ class ContextBudgetUsage(BaseModel):
     total_used: int
 
 class PromptBudgetProfile(BaseModel):
-    """Prompt 的预算属性（§18.4），由 AgentManager 用于计算 ContextBudget 预留。"""
+    """Prompt 的预算属性（§18.4），由 ContextBuildRule 用于计算 ContextBudget 预留。"""
     system_prompt_tokens: int
     reserved_output_tokens: int
 ```
@@ -2013,9 +2013,20 @@ RetrieverRegistry 管理每个来源的：
 - Tool Discovery 只从 Agent allowlist 中选择 ToolSpec，不执行 Tool。
 - Memory、知识库和业务查询通过 `RetrieverAdapter` 返回只读候选。
 - Retriever 必须经过身份、数据域和权限过滤，但不属于 ToolRuntime。
-- 搜索等能力如果注册为 Tool，就只能由模型产生 ToolAction，并在 EndRule 执行；不能在 Recall 阶段直接调用。
+- 搜索等能力如果注册为 Tool，就只能由模型产生 ToolAction，并在 ResultProcess 阶段的 ToolExecutionRule 中执行；不能在 Recall 阶段直接调用。
 - 任何写操作都禁止进入 RecallSourcesRule。
 - 第一版业务 Retriever 扩展白名单只有 `ChatRetrieverAdapter`：它位于 Business Retriever 分支，返回带 `content_ref` 的聊天/媒体候选，不做融合、重排、素材最终选择或 Context 组装。
+
+**Recall 阶段是相关性召回的统一入口**（v1 实现两个召回源，每源一个框架 Rule，命中按来源分组进入 ContextBuild）：
+
+| 召回源 | 框架 Rule | 数据来源 | 写入时机 | 召回范围 |
+|---|---|---|---|---|
+| 长期记忆 | `LongTermMemoryRecallRule` | MemoryStore（long-term-memory namespace） | **唯一自动生产路径：上下文压缩时 LLM 明确输出的 `long_term_memory_candidates`**；短期 summary/facts 与原文均不进长库 | 跨所有会话 |
+| 工具执行结果 | `ToolObservationRecallRule` | MemoryStore（独立 tool-observation namespace） | ToolExecutionRule 内成功观察以 (tool, 参数摘要) 为 key 沉淀，同 key 自动 supersede | 跨会话（principal 共享） |
+
+**召回范围契约（存储层强制）**：长期记忆 = principal 级 LongTermStore，跨会话共享；短期记忆 = principal + session 级 ShortTermStore，只由 ContextBuild 直接读取，不经过 Recall。原始全量会话位于独立 RawConversationStore，仅供审计、显式提取和重新生成压缩结果；它不是 Recall 源，压缩后移出 `recent_event_ids` 的原始事件不会再次进入模型上下文。
+
+近期窗口（连续性保底）由 ContextBuild 的 `prepare_context` 从短期记忆直接注入；Recall 只补充跨会话的长期记忆和工具观察。
 
 ### 16.5 容错
 
@@ -2114,6 +2125,8 @@ ContextPack 只承载本轮模型需要的业务输入和证据。Context Build 
 
 Context 总预算仅从所选模型上下文窗口扣除 Prompt 与输出预留量得到。M2 可以通过框架 contract test 用测试 Adapter 验证 seam 可替换性，但第一版生产业务白名单不因此扩大；只有离线评测证明新的业务扩展点确有必要时，才修改代码和白名单发布新版本。
 
+上下文压缩本身也是一次模型请求，因此同样受窗口约束。ContextBuild 按原始事件边界选择“最旧连续前缀”，把 system prompt、已有短期摘要、结构化状态、JSON 包装和输出预留共同计入预算；一次放不下时分多轮压缩，单条事件本身超窗时在模型调用前失败。压缩输出严格分为两类：`context_update` 替换短期工作集；`long_term_memory_candidates` 只包含模型明确判断具有跨会话价值的稳定事实、偏好、可复用决策或经验，没有合适内容时必须返回空数组。压缩成功后，仅从 ShortTermStore 的 `recent_event_ids` 移除本批事件并更新摘要；RawConversationStore 中的全量原文保持不变。
+
 ### 17.7 设计理由
 
 Context 构建比普通 Stage 更复杂，需要独立 State、节点级 trace、Adapter、版本和评测，因此设计为 Module Pipeline，而不是单个 ContextAssembler 函数。
@@ -2178,6 +2191,11 @@ prompt_id + template + variables_schema
 - ModelAdapter
 - ResponseArchiveAdapter
 
+ModelAdapter 的输出是可序列化、provider-neutral 的原始响应契约：原始文本、原始
+finish reason、usage，以及每个 tool call 的名称、ID 和未解析参数字符串。Adapter
+只负责把供应商 SDK 对象映射到该传输契约，不解析 structured output、不校验
+`ContextUpdate`、不构造 `AgentAction`。这些解释工作统一由 ResultProcessRule 完成。
+
 限流和短暂网络错误可在统一有界规则内重试；Schema 问题由 ResultProcessRule 使用同一个模型修复一次，失败后进入 `run_failed` 或人工处理；模型拒绝映射为结构化错误。第一版不存在 ModelRouter 或备用模型切换。
 
 ### 18.6 设计理由
@@ -2195,12 +2213,13 @@ LLM 原始响应不能直接进入业务状态。ResultProcessRule 将响应解�
 ```text
 Load Raw Response
 → Parse Provider Format
-→ Extract Structured Output / Tool Calls
+→ Extract Structured Output / Tool Calls（全部，含并行 tool calls；参数 JSON 解析失败记 arguments_error，不静默降级）
 → Schema Validate
 → Optional Schema Repair
 → Action Classify
 → Action Guardrail
-→ AgentAction
+→ AgentAction（每个 tool call 各自持久化为 Artifact）
+→ 串行执行 Rule 链（框架内置 ToolExecutionRule / CompactionApplyRule + 用户 Rule）
 ```
 
 ### 19.3 AgentAction
@@ -2237,24 +2256,26 @@ class FailureAction(BaseModel):
 - Schema repair 最多一次，失败后进入 run_failed。
 - Tool 名称必须解析为 Agent allowlist 中的精确版本。
 - 无效 Tool 参数不进入 ToolRuntime。
+- Action 形成是阶段的固定逻辑：先把响应解析为 AgentAction（多个 tool call 各自持久化），再串行执行 Rule 链；规则消费 formation 结果的不可变快照，不观测其他规则的输出（接口为并行化预留，v1 串行执行）。
+- Tool 执行由框架内置 ToolExecutionRule 在本阶段完成（治理链 Policy → Approval interrupt → ToolRuntime.execute）；压缩结果的应用由 CompactionApplyRule 完成。用户自定义 Rule 不得执行 Tool、调用子 Agent 或写长期 Memory。
+- max_tool_calls 闸门位于 formation 之后、Rule 执行之前：超限时直接置 pass_disposition=run_failed，不产生 Observation、不执行 Tool。
 - Final 输出在 EndRule Final 分支继续执行 OutputGuardrail。
-- ResultProcessRule 不执行 Tool、不调用子 Agent、不写长期 Memory。
 - PreRecallRule、RecallSourcesRule、ContextBuildRule、ModelRule 和 ResultProcessRule 的可恢复失败统一转换为 FailureAction，并沿失败边进入 EndRule；进程崩溃等引擎级故障由 LangGraph checkpoint 恢复，不伪造 PassResult。
 
 ### 19.5 设计理由
 
-解析和执行分开后，模型只提出动作，框架负责许可和副作用；同一 Action Schema 可跨模型供应商使用。
+解析和执行分开后，模型只提出动作，框架负责许可和副作用；同一 Action Schema 可跨模型供应商使用。执行收敛到 ResultProcess 阶段使"解析 → 行动 → 反馈"在同一 pass 内闭环，EndRule 只做收口路由；工具失败以带原因的 Observation 回喂模型自纠，只有人工审批否决与 unknown 结果终止 run。
 
 ## 20. EndRule
 
 ### 20.1 背景与位置
 
-每个正常完成或产生可恢复失败的 AgentPassPipeline 都必须进入 EndRule。EndRule 消费 AgentAction，执行 Final、Tool、Delegate、NeedInput 或 Failure 分支，并返回 PassResult；默认实现为 `EndRulePipeline`。进程退出等尚未完成的 Pass 由 checkpoint 恢复，不属于“已经绕过 EndRule 完成”。
+每个正常完成或产生可恢复失败的 AgentPassPipeline 都必须进入 EndRule。EndRule 是纯收口路由：消费 ResultProcess 阶段产出的 action_type、Observation 与前置 disposition，决定 next_pass / run_completed / run_failed 并返回 PassResult；动作执行已由 ResultProcess 阶段的 Rule 链完成（§19.4）。自定义 End Rule 先于默认路由运行且可覆盖处置。进程退出等尚未完成的 Pass 由 checkpoint 恢复，不属于“已经绕过 EndRule 完成”。
 
 ```text
-ResultProcessRule
-→ AgentAction
-→ EndRule
+ResultProcessRule（Action formation + Rule 链执行）
+→ Observation / 前置 disposition
+→ EndRule（纯路由）
 → PassResult
 → AgentLoop
 ```
@@ -2263,33 +2284,13 @@ ResultProcessRule
 
 ```mermaid
 flowchart TD
-    A[AgentAction] --> V[Validate Action]
-    V --> R{Action Type}
+    A[action_type + Observation 状态 + 前置 disposition] --> R{路由}
 
-    R -->|Final| OG[Output Guardrail]
-    OG --> MW[Memory Propose]
-    MW --> RC[run_completed]
-
-    R -->|Tool| TR[Resolve Tool]
-    TR --> TP[Permission / Policy Precheck]
-    TP --> HG{Need Approval}
-    HG -->|Yes| HI[HumanGate interrupt]
-    HI -->|Runtime 已完成 ResumeGuard 后恢复| RV[Approval / Permission / Policy Revalidate]
-    HG -->|No| ID[Execution Reserve]
-    RV --> ID
-    ID --> TE[Tool Execute / Reconcile]
-    TE --> ON[Observation Normalize]
-    ON --> NP[next_pass]
-
-    R -->|Delegate| AD[Agent Dispatch]
-    AD --> AN[AgentResult Normalize]
-    AN --> NP
-
-    R -->|NeedInput| IN[Human interrupt]
-    IN --> NP
-
-    R -->|Failure| FP[Failure Policy]
-    FP --> RF[run_failed / bounded retry]
+    R -->|前置 run_failed 已存在| K[保持 run_failed]
+    R -->|Tool / Compaction| NP[next_pass]
+    R -->|Final| FR[Resolve Final output ref]
+    FR --> RC[run_completed]
+    R -->|Failure / 未知| RF[run_failed]
 ```
 
 ### 20.3 PassResult
@@ -2311,9 +2312,9 @@ class PassResult(BaseModel):
 
 Runtime 在 RunControlState 中维护 `running | suspended | resume_accepted | cancel_requested | cancelled | completed | failed`。`suspended` 来自 LangGraph interrupt，不是 EndRule 生成的 PassResult disposition；中间状态是恢复/取消准入投影，不替代 graph state。
 
-### 20.4 Tool 分支
+### 20.4 Tool 执行链（在 ResultProcess 阶段执行）
 
-Agent 提出的 ToolAction 在 EndRule 执行，但不是写在一个巨型 EndRule 函数中。必须拆为独立 LangGraph 节点：
+Agent 提出的 ToolAction 由 ResultProcess 阶段内置的 ToolExecutionRule 执行（自 §19.4 起，不再位于 EndRule），治理语义不变：
 
 ```text
 ToolResolve
@@ -2329,7 +2330,7 @@ ToolResolve
 → PassResult(next_pass)
 ```
 
-对应的 LangGraph 原子节点必须显式注册，不能折叠成一个 Tool 执行函数：
+上述语义步骤的目标架构是拆为独立 LangGraph 节点（下表）；v1 实现把它们收敛为 ToolExecutionRule 内对 ToolRuntime 的原子调用（Policy → Approval interrupt → execute → normalize → settle），运行于单一 result_process 节点中，interrupt 的 checkpoint 语义由 LangGraph 节点重放保证。节点级拆分保留为后续演进，语义链不变：
 
 | 语义步骤 | LangGraph 节点名 | 核心职责 |
 |---|---|---|
@@ -2360,7 +2361,7 @@ FinalAction
 → PassResult(run_completed)
 ```
 
-第一版 Memory propose 的确定失败只记录告警，不破坏已经合格的 Final 输出；`unknown` 必须保存 pending mutation 并按 operation ID 对账，不能降级成普通告警或重复 propose。
+第一版 Memory propose 的确定失败只记录告警，不破坏已经合格的 Final 输出；`unknown` 必须保存 pending mutation 并按 operation ID 对账，不能降级成普通告警或重复 propose。v1 实现说明：长期记忆的唯一自动生产路径在压缩链路——CompactionApplyRule→apply_compaction 只沉淀 LLM 明确输出的 `long_term_memory_candidates`（内容摘要 key 为 `compaction-extract:{digest}`，跨会话可召回）；`context_update.summary/facts` 仅属于短期工作集，不自动晋升。Final 不做逐条事件提取。会话原文永久留在独立 RawConversationStore，当前模型工作集位于 ShortTermStore；压缩后原文不会经 Recall 回流。显式 `extract` API 保留为开发者手动能力。
 
 ### 20.6 Delegate 与 NeedInput
 
@@ -2371,16 +2372,16 @@ FinalAction
 
 ### 20.7 失败与恢复
 
-- 权限/Policy 拒绝：生成结构化 denied observation 或 run_failed。
-- Tool 参数错误：不执行 Tool，返回可修复 observation。
-- Tool 瞬时错误：只在其写安全能力允许时按统一有界规则重试。
-- Tool 结果未知：按 `WriteSafetyMode` 进入 reconcile 或人工确认，不直接 next_pass，也不盲目重试。
-- 达到 max passes/tool calls/cost：返回 run_failed 或升级人工。
+- 权限/Policy 拒绝：生成带原因的 denied observation 回喂模型（next_pass，模型换路）；人工审批否决：run_failed，模型不可重试。
+- Tool 参数错误/模型参数 JSON 解析失败：不执行 Tool，返回带原因的可修复 observation 回喂模型自纠。
+- Tool 执行异常/超时（read 类）：返回带原因的 failed observation 回喂模型；瞬时错误仅 read 类按统一有界规则重试。
+- Tool 超时/崩溃（write 类）：结果为 unknown，按 `WriteSafetyMode` 进入 reconcile 或人工确认；v1 无外部写 Tool，unknown 直接 run_failed，不盲目重试。
+- 达到 max passes/tool calls/cost：返回 run_failed 或升级人工；max_tool_calls 在 formation 后、执行前短路。
 - OutputGuardrail 失败：允许有界修订，不能无限回路。
 
 ### 20.8 设计理由
 
-EndRule 是“本轮收口和行动决策”，不是“整个 Agent 必然结束”。所有 Pass 都经过同一出口，便于统一 Policy、usage、checkpoint 和 trace。
+EndRule 是“本轮收口与路由”，不是“整个 Agent 必然结束”。所有 Pass 都经过同一出口，便于统一 Policy、usage、checkpoint 和 trace。
 
 ## 21. Tool 系统
 
@@ -2558,7 +2559,7 @@ class ToolRuntime(Protocol):
     async def normalize_observation(self, result: RawToolResult) -> ToolObservation: ...
 ```
 
-`ToolExecutionRequest` 强制携带 execution/idempotency/ToolRef/attempt/generation/SettlementPermit。`reconcile` 只能由 ReconciliationControlStore 的当前短 lease owner调用：Gateway 从 incident/effect 权威记录生成 request/context/permit，逐字段绑定 tenant/source/execution/effect/account/exact reconcile ToolRef/expected versions，调用方不能自报。Runtime 只使用 server-side sealed original SettlementPermit（permit 中仅绑定其 digest）把 ReconcileResult 送入 ordinary/external settlement 入口；reconciliation control 无权 progress write、adopt、创建新 execution 或读取业务 payload。Run cancelled 后使用 cancellation-incident-scoped reconciliation control，Erasure 使用 case-scoped control；所有路径重查 tombstone和 account scope。
+`ToolExecutionRequest` 强制携带 execution/idempotency/ToolRef/attempt/generation/SettlementPermit。provider 参数 JSON 在 ResultProcess 阶段解析；解析失败写入已形成 `ToolAction.arguments_error`，ToolExecutionRule 只把该错误规范化为 observation，ToolRuntime 不接触模型原始格式。v1 实现说明：`ToolManager` 满足 ToolRuntime 的 v1 子集（resolve/validate/scope 检查/execute（含超时、并发闸、read 重试、输出规范化）/reserve/settle，execution record 按 `(control_id, tool_call_id)` 确定性去重并在 settle 后支持 observation 重放），`adopt`/`reconcile` 保留为协议桩。`reconcile` 只能由 ReconciliationControlStore 的当前短 lease owner调用：Gateway 从 incident/effect 权威记录生成 request/context/permit，逐字段绑定 tenant/source/execution/effect/account/exact reconcile ToolRef/expected versions，调用方不能自报。Runtime 只使用 server-side sealed original SettlementPermit（permit 中仅绑定其 digest）把 ReconcileResult 送入 ordinary/external settlement 入口；reconciliation control 无权 progress write、adopt、创建新 execution 或读取业务 payload。Run cancelled 后使用 cancellation-incident-scoped reconciliation control，Erasure 使用 case-scoped control；所有路径重查 tombstone和 account scope。
 
 ### 21.6 ToolObservation
 
@@ -2635,10 +2636,21 @@ Memory 解决“跨步骤和跨 Run 保留可复用信息”，RAG 解决“从�
 | 层 | 保存位置 | 用途 | 生命周期 |
 |---|---|---|---|
 | Working Memory | AgentLoop/Pass State | observation 和单轮临时状态 | Agent Run |
-| Thread Memory | LangGraph checkpointer | 对话线程与恢复 | thread |
-| Episodic Memory | MemoryStore/VectorStore | 过去任务、决策和结果 | 跨 thread |
-| Semantic Memory | MemoryStore/VectorStore | 用户偏好、事实和概念 | 跨 thread |
+| 原始全量会话 | RawConversationStore（principal + session 级） | 追加保存完整原始事件，供审计、显式提取和压缩重建；不直接召回进模型 | conversation |
+| 短期记忆（Thread Memory） | ShortTermStore（principal + session 级） | 保存压缩 summary、结构化状态和未压缩 `recent_event_ids`；ContextBuild 直接装配 | thread |
+| 长期记忆（Semantic） | MemoryStore/VectorStore（principal 级） | **压缩时 LLM 明确选出的 `long_term_memory_candidates`（唯一自动生产路径）**；短期 summary 不自动写入 | 跨会话 |
+| Episodic Memory | MemoryStore/VectorStore | 过去任务、决策和结果；仅由显式 `extract` API 生产，无自动路径 | 跨 thread |
+| Tool Observation | MemoryStore（独立 tool-observation namespace） | 成功工具结果按 (tool, 参数摘要) 沉淀并 supersede，供跨 run 复用 | 跨 thread（principal 共享） |
 | Procedural Memory | Registry/Prompt/Policy | 技能和规则引用 | 版本化 |
+
+`LongTermMemory` 不携带 `tool` 字段：它只表达压缩提炼或显式提取产生的
+semantic/episodic/procedural 记忆。工具结果由独立的 `ToolObservationMemory`
+表达，并保留 `tool_name`、`arguments_digest` 和结果内容；这使按
+`(tool_name, arguments_digest)` 更新与去重成为存储契约，而不是依赖一个可空字段。
+各层使用独立物理 Store，并以 tenant/principal/session（长期记忆为 tenant/principal）隔离 namespace。原始全量会话、短期上下文、长期记忆和工具观察不会写入同一存储文件。长期记忆与工具观察也使用不同 namespace，长期记忆召回不会误把工具原始输出当作提炼事实，工具结果
+召回也可以单独限额。若旧的持久化数据曾把工具结果写成 `LongTermMemory.tool`，需要在
+升级时迁移到 tool-observation namespace；否则 Pydantic 默认会忽略额外的 `tool`
+字段，记录仍可读取，但工具身份、按工具过滤及同参数 supersede 语义会丢失。
 
 ### 22.3 模块拆分
 
@@ -2764,9 +2776,18 @@ class MemoryMutationResult(BaseModel):
     reason_codes: list[str]
 
 class MemoryManager(Protocol):
-    async def recall(
-        self, request: MemoryRecallRequest, ctx: DataAccessContext
-    ) -> MemoryRecallResult: ...
+    # "recall" 是 pipeline 阶段概念；memory 域只暴露 get* 查询，
+    # 由 Recall 阶段的框架 rule 调用（v1 实际签名见 ports/memory.py：
+    # get_long_term_memories / get_tool_observations / put_tool_observation /
+    # append_event / list_events / get_session_context / prepare_context /
+    # extract / put / propose / revoke）。
+    async def get_long_term_memories(
+        self, query: RecallQuery, ctx: ToolContext
+    ) -> list[LongTermMemory]: ...
+
+    async def get_tool_observations(
+        self, query: RecallQuery, ctx: ToolContext, *, limit: int = 10,
+    ) -> list[ToolObservationMemory]: ...
 
     async def propose(
         self, candidate: MemoryCandidate, command: MemoryMutationCommand,

@@ -8,7 +8,8 @@ from examples.structured_agent.run import build_server
 from usagi_agent.api.errors import SafeError
 from usagi_agent.kernel.context import RunContext
 from usagi_agent.memory.manager import DefaultMemoryManager
-from usagi_agent.memory.store import JsonFileStore
+from usagi_agent.memory.types import PreparedContext, RawEvent, SessionContext
+from usagi_agent.pipelines.artifacts import get_model
 from usagi_agent.pipelines.config import AgentPipelineConfig
 from usagi_agent.pipelines.config import ContextBuildPipelineConfig
 from usagi_agent.pipelines.loop.state import AgentRunState
@@ -29,6 +30,7 @@ from usagi_agent.server.runtime import ServerRuntime
 from usagi_agent.agents.spec import AgentSpec
 from usagi_agent.types.refs import PrincipalRef
 from usagi_agent.types.context import RecallQuery
+from usagi_agent.types.model import ModelRequest
 
 
 class _FirstPreRecallRule(PreRecallAdapterConfig):
@@ -171,7 +173,7 @@ async def test_context_build_runs_filter_chain_before_rank_chain():
     processor = ContextBuildProcessor(
         config, cast(ServerRuntime, object()), cast(AgentSpec, object())
     )
-    recalled_contexts: list[object] = ["0", "1", "2", "3"]
+    recalled_contexts: dict[str, list[object]] = {"long_term_memory": ["0", "1", "2", "3"]}
 
     recalled_contexts = await processor._run_filters(recalled_contexts, _context())
     await processor._run_rankers(recalled_contexts, _context())
@@ -186,7 +188,72 @@ async def test_context_build_runs_filter_chain_before_rank_chain():
         "filter:second:3",
         "rank:rank",
     ]
-    assert recalled_contexts == ["3", "2"]
+    assert recalled_contexts == {"long_term_memory": ["3", "2"]}
+
+
+def test_compaction_request_batches_an_oldest_prefix_within_model_window():
+    server = build_server()
+    base_agent = server.runtime.agent_manager.get("research_writer")
+    agent = base_agent.model_copy(
+        update={
+            "model": base_agent.model.model_copy(
+                update={"context_window": 800, "default_max_output_tokens": 100}
+            )
+        }
+    )
+    processor = ContextBuildProcessor(
+        ContextBuildPipelineConfig(), server.runtime, agent
+    )
+    events = [
+        RawEvent(
+            event_id=f"event-{index}",
+            session_id="thread",
+            role="user",
+            content=str(index) * 300,
+        )
+        for index in range(4)
+    ]
+    prepared = PreparedContext(
+        session=SessionContext(), events_to_compact=events
+    )
+
+    batch = processor._fit_compaction_batch(prepared)
+
+    assert 0 < len(batch) < len(events)
+    assert [event.event_id for event in batch] == [
+        event.event_id for event in events[: len(batch)]
+    ]
+    payload = processor._compaction_payload(prepared, batch)
+    assert processor._compaction_input_tokens(payload) <= 700
+
+
+def test_compaction_request_rejects_one_event_larger_than_model_window():
+    server = build_server()
+    base_agent = server.runtime.agent_manager.get("research_writer")
+    agent = base_agent.model_copy(
+        update={
+            "model": base_agent.model.model_copy(
+                update={"context_window": 500, "default_max_output_tokens": 100}
+            )
+        }
+    )
+    processor = ContextBuildProcessor(
+        ContextBuildPipelineConfig(), server.runtime, agent
+    )
+    prepared = PreparedContext(
+        session=SessionContext(),
+        events_to_compact=[
+            RawEvent(
+                event_id="huge",
+                session_id="thread",
+                role="user",
+                content="x" * 3_000,
+            )
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="first event"):
+        processor._fit_compaction_batch(prepared)
 
 
 @pytest.mark.asyncio
@@ -236,9 +303,7 @@ async def test_llm_compaction_is_applied_then_restarts_the_pipeline(
 ):
     server = build_server()
     runtime = server.runtime
-    runtime.memory_manager = DefaultMemoryManager(
-        JsonFileStore(tmp_path / "memory.json")
-    )
+    runtime.memory_manager = DefaultMemoryManager(path=tmp_path / "memory.json")
     scenario = runtime.scenario_registry.get("example.research_writer")
     processor = PipelineProcessor(scenario.config, runtime)
     context = _context()
@@ -267,10 +332,22 @@ async def test_llm_compaction_is_applied_then_restarts_the_pipeline(
     )
     assert session.compacted_until == session.extracted_until
     assert session.summary == "Compacted 2 earlier events."
-    recalled = await runtime.memory_manager.recall(
-        RecallQuery(query_id="q", text="alpha"), tool_context
+    # Long-term memory holds the distilled summary (semantic), never the
+    # verbatim "alpha" event. Raw events remain archived but are not recalled.
+    long_term = await runtime.memory_manager.get_long_term_memories(
+        RecallQuery(query_id="q", text="durable information"), tool_context
     )
-    assert recalled.hits
+    assert long_term
+    assert all(
+        hit.type == "semantic" and hit.key.startswith("compaction-extract:")
+        for hit in long_term
+    )
+    assert any(
+        "alpha" in event.content
+        for event in await runtime.memory_manager.list_events(
+            context.thread_id, tool_context
+        )
+    )
 
     state.update(cast(AgentRunState, await processor.process_end(state, context)))
     assert state.get("pass_disposition") == "next_pass"
@@ -278,4 +355,14 @@ async def test_llm_compaction_is_applied_then_restarts_the_pipeline(
         cast(AgentRunState, await processor.process_context_build(state, context))
     )
     assert state.get("context_operation") == "normal"
+    request = await get_model(
+        runtime.persistence.artifact_manager,
+        state["model_request_ref"],
+        ModelRequest,
+    )
+    assert request is not None
+    serialized_messages = str(request.messages)
+    assert "Compacted 2 earlier events." in serialized_messages
+    assert "alpha alpha" not in serialized_messages
+    assert "beta beta" not in serialized_messages
     await server.shutdown()
