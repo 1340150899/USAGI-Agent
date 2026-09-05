@@ -37,7 +37,8 @@ class ToolSpec(BaseModel):
     retry_backoff_seconds: float = 1.0
     max_output_bytes: int = 64_000
     # Extension seams: ecosystem kind, sandbox dispatch, scope checks.
-    adapter_kind: Literal["python", "http", "mcp"] = "python"
+    # Open string so core contracts do not depend on optional adapter modules.
+    adapter_kind: str = "python"
     execution_env: Literal["in_process", "sandbox"] = "in_process"
     required_scopes: tuple[str, ...] = ()
 

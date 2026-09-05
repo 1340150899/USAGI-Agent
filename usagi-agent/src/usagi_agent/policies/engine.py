@@ -6,17 +6,31 @@ structured pass/fail (§23.3).
 """
 from __future__ import annotations
 
-from usagi_agent.ports import PolicyEngine, ToolContext
+from usagi_agent.api.errors import UnknownToolError
+from usagi_agent.ports import PolicyEngine, ToolCatalog, ToolContext
 from usagi_agent.types.policy import GuardrailResult, PolicyDecision
 from usagi_agent.types.refs import PrincipalRef
 
 
 class DefaultPolicyEngine(PolicyEngine):
+    def __init__(self, tool_catalog: ToolCatalog | None = None) -> None:
+        self._tool_catalog = tool_catalog
+
     async def evaluate(
         self, *, principal: PrincipalRef, action: str, tool_name: str | None = None,
         arguments: dict | None = None, context: ToolContext,
     ) -> PolicyDecision:
-        # v1 dev: allow everything; production Policy is code-defined, not LLM-overridable.
+        if action == "tool.execute" and tool_name and self._tool_catalog is not None:
+            try:
+                risk = self._tool_catalog.get_spec(tool_name).risk
+            except UnknownToolError:
+                risk = None
+            if risk == "high_risk_write":
+                return PolicyDecision(
+                    effect="require_approval",
+                    reason_codes=["policy.high_risk_write"],
+                    obligations=[],
+                )
         return PolicyDecision(effect="allow", reason_codes=["policy.default_allow"], obligations=[])
 
 

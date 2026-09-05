@@ -23,7 +23,7 @@ class ServiceRuntimeInitializer:
         persistence = PersistenceInitializer.init(settings, observability)
         tool_manager = ToolInitializer.init(persistence)
         memory_manager = DefaultMemoryManager(path=settings.memory_path)
-        policy_engine = DefaultPolicyEngine()
+        policy_engine = DefaultPolicyEngine(tool_manager)
         guardrail = DefaultGuardrail()
         kernel_components = KernelInitializer.init(persistence, observability)
         erasure = ErasureInitializer.init(

@@ -33,27 +33,78 @@ request = RunStartRequest(
 
 ## MCP tools
 
-Install the optional MCP dependency with `pip install -e ".[mcp]"`. An
-initialized MCP `ClientSession` can then be discovered and registered through
-the existing governed ToolManager, so scopes, timeouts, retries and audit
-records also apply to remote tools.
+Install the optional MCP dependency with `pip install -e ".[mcp]"`. MCP
+servers are ordinary internal `ToolSource` implementations. The server,
+registry, kernel and pipeline layers do not import or special-case MCP. The
+application composition root explicitly loads the source before registering
+agents and scenarios, so normal tool allow-list validation remains fail-fast.
 
 ```python
-from usagi_agent.tools import MCPToolSource
+from pydantic import SecretStr
+from usagi_agent.registry import BootstrapSettings
+from usagi_agent.server import ServiceRuntimeInitializer
+from usagi_agent.tools.mcp import MCPServerConfig, MCPServerSource
 
-source = MCPToolSource(
-    session,
+runtime = ServiceRuntimeInitializer.init(BootstrapSettings())
+source = MCPServerSource(
+    MCPServerConfig(
+        name="remote",
+        transport="streamable_http",
+        url="https://mcp.example.com/mcp",
+        headers={"Authorization": SecretStr("Bearer ...")},
+        # ca_bundle="/etc/ssl/private/company-ca.pem",  # optional private CA
+        enabled_tools=("read_file", "write_file"),
+        required_scopes=("filesystem.access",),
+        spec_overrides={
+            "read_file": {"risk": "read"},
+            "write_file": {
+                "risk": "high_risk_write",
+                "write_safety": "at_most_once_manual",
+            },
+        },
+    ),
     artifact_manager=runtime.persistence.artifact_manager,
-    name_prefix="browser_",
-    spec_overrides={
-        "screenshot": {"required_scopes": ("browser.read",)},
-    },
 )
 await runtime.tool_manager.load_source(source)
 ```
 
-MCP image results are stored as Artifacts and returned as typed image content
-parts; base64 payloads are not retained in graph state or conversation memory.
+Streamable HTTP also supports a private CA bundle, mutual-TLS certificate/key,
+an HTTP proxy, HTTP/2 and configurable session termination. For a local MCP
+subprocess, use `transport="stdio"` with `command`, `args`, `cwd` and optional
+secret environment variables. `ToolManager` owns every successfully loaded
+source and closes its HTTP connection or subprocess during runtime shutdown.
+
+The default local tool name is `<server>__<remote_tool>`; use that name in an
+agent's `allowed_tools`. Tool names are normalized to the model-safe character
+set, paginated discovery is supported, and startup fails on empty discovery or
+name collisions. Use `enabled_tools` as an explicit exposure allow-list.
+
+MCP annotations are treated only as untrusted hints. A tool is classified as
+read-only only when it explicitly advertises `readOnlyHint=true`; every other
+tool defaults to `high_risk_write` plus `at_most_once_manual`, which requires
+approval under the default policy. Pin trusted corrections in `spec_overrides`.
+Configured environment variables and HTTP headers are stored as `SecretStr`
+values and are not shown in configuration representations.
+
+Text, structured output, resource links and embedded text are normalized into
+the observation. MCP image, audio and embedded binary resource results are
+stored as Artifacts, so base64 payloads are not retained in graph state or
+conversation memory. Health checks perform an uncached tool-list request, and
+runtime shutdown closes HTTP connections or stdio subprocesses.
+
+For embedding or custom connection ownership, the lower-level
+`MCPToolSource(session, ...)` API remains available.
+
+For an opt-in live-network smoke test, use Cognition's public, no-auth,
+read-only DeepWiki endpoint. The first command only performs discovery; the
+second additionally reads the documentation structure of the public MCP Python
+SDK repository. The script refuses non-HTTPS URLs and restricts the call mode
+to the exact DeepWiki host and tool.
+
+```bash
+python scripts/live_mcp_http_smoke.py --url https://mcp.deepwiki.com/mcp
+python scripts/live_mcp_http_smoke.py --url https://mcp.deepwiki.com/mcp --deepwiki-read-test
+```
 
 ## Current pipeline and memory implementation
 

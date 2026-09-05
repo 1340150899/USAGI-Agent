@@ -18,6 +18,7 @@ import asyncio
 import json
 import time
 from collections.abc import Iterable
+from contextlib import suppress
 from datetime import datetime, timezone
 from hashlib import sha256
 
@@ -52,6 +53,7 @@ class ToolManager:
         self._execution_store = execution_store
         self._artifact_manager = artifact_manager
         self._semaphores: dict[str, asyncio.Semaphore] = {}
+        self._sources: list[ToolSource] = []
 
     # ------------------------------------------------------------------ registry
 
@@ -84,13 +86,26 @@ class ToolManager:
 
     async def load_source(self, source: ToolSource) -> tuple[ToolAdapter, ...]:
         """Discover and register every adapter from a dynamic tool source."""
-        loaded = await source.load()
-        adapters = tuple(loaded)
-        for adapter in adapters:
-            if not isinstance(adapter, ToolAdapter):
-                raise TypeError("tool source returned a non-ToolAdapter value")
-        self.register_many(adapters)
-        return adapters
+        try:
+            loaded = await source.load()
+            adapters = tuple(loaded)
+            pending_names: set[str] = set()
+            for adapter in adapters:
+                if not isinstance(adapter, ToolAdapter):
+                    raise TypeError("tool source returned a non-ToolAdapter value")
+                if adapter.spec.name in self._tools or adapter.spec.name in pending_names:
+                    raise DuplicateToolError(adapter.spec.name)
+                pending_names.add(adapter.spec.name)
+                self._validate_spec(adapter.spec)
+            self.register_many(adapters)
+            self._sources.append(source)
+            return adapters
+        except BaseException:
+            close = getattr(source, "shutdown", None)
+            if close is not None:
+                with suppress(Exception):
+                    await close()
+            raise
 
     def resolve(self, name: str) -> ToolAdapter:
         try:
@@ -425,6 +440,15 @@ class ToolManager:
                 statuses[name] = await adapter.health()
             except Exception:
                 statuses[name] = "unhealthy"
+        for source in self._sources:
+            health = getattr(source, "health", None)
+            if health is None:
+                continue
+            source_name = str(getattr(source, "name", type(source).__name__))
+            try:
+                statuses[source_name] = await health()
+            except Exception:
+                statuses[source_name] = "unhealthy"
         return statuses
 
     async def shutdown(self) -> None:
@@ -434,5 +458,12 @@ class ToolManager:
                 await adapter.shutdown()
             except Exception as exc:
                 errors.append(exc)
+        for source in reversed(self._sources):
+            close = getattr(source, "shutdown", None)
+            if close is not None:
+                try:
+                    await close()
+                except Exception as exc:
+                    errors.append(exc)
         if errors:
             raise ExceptionGroup("one or more tools failed to shut down", errors)

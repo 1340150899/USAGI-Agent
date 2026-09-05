@@ -3,7 +3,7 @@
 ToolRuntime / ToolSource / ToolExecutionBackend / ToolSelector Protocols +
 RetrieverAdapter. v1 implementations: ToolRuntime is satisfied by
 ``tools.manager.ToolManager``; the remaining Protocols are extension seams
-(HTTP/MCP adapters, execution sandboxes, dynamic tool search) — declared here
+(remote adapters, execution sandboxes, dynamic tool search) — declared here
 so later implementations do not move call sites.
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ from usagi_agent.types.tool import (
 
 @runtime_checkable
 class ExecutableTool(Protocol):
-    """The structural contract every adapter kind (python/http/mcp) satisfies."""
+    """The structural contract every local or remote adapter satisfies."""
 
     spec: ToolSpec
 
@@ -51,12 +51,14 @@ class ToolRuntime(Protocol):
 class ToolCatalog(Protocol):
     """Read-only registry view used by selection and bootstrap validation."""
 
+    def get_spec(self, name: str) -> ToolSpec: ...
+
     def get_specs(self, names: Iterable[str]) -> tuple[ToolSpec, ...]: ...
 
 
 @runtime_checkable
 class ToolSource(Protocol):
-    """Bootstrap-time provider of tools; HTTP and MCP are future sources."""
+    """Bootstrap-time provider of tools from any optional implementation."""
 
     async def load(self) -> tuple[Any, ...]: ...
 
