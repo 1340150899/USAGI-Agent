@@ -16,7 +16,9 @@ from pydantic import BaseModel
 from usagi_agent.ports.context import ToolContext
 from usagi_agent.types.action import ToolObservation
 from usagi_agent.types.context import RecallCandidate, RecallQuery
-from usagi_agent.types.tool import ReconcileResult, ToolReconcileRequest, ToolSpec
+from usagi_agent.types.tool import (
+    ReconcileResult, ToolAdapterResult, ToolReconcileRequest, ToolSpec,
+)
 
 
 @runtime_checkable
@@ -27,7 +29,7 @@ class ExecutableTool(Protocol):
 
     async def execute(
         self, arguments: dict[str, object], context: ToolContext
-    ) -> BaseModel | dict[str, object]: ...
+    ) -> BaseModel | dict[str, object] | ToolAdapterResult: ...
 
 
 @runtime_checkable

@@ -2,6 +2,59 @@
 
 Business-agnostic Agent engineering framework built on top of LangGraph.
 
+## Multimodal input
+
+Run requests can attach provider-neutral image parts by remote URL or by an
+existing Artifact reference. The graph starts with one opaque request Artifact
+ID. PreRecall classifies that request; the Model rule then selects only the
+modalities supported by its model and resolves image bytes immediately before
+the provider call. Provider adapters only translate the prepared content.
+
+Conversation events use `content_parts` as their only content source. Their
+`search_text` value is derived from text parts for indexing and token accounting;
+it is never maintained as a second model-input field.
+
+```python
+from usagi_agent.types.content import ImageContentPart
+from usagi_agent.types.run import RunStartRequest
+
+request = RunStartRequest(
+    scenario_key="example.research_writer",
+    request_idempotency_key="inspect-image-1",
+    input=BusinessRequest(query="Inspect the attachment"),
+    content_parts=[
+        ImageContentPart(
+            media_type="image/png",
+            url="https://example.com/image.png",
+        )
+    ],
+)
+```
+
+## MCP tools
+
+Install the optional MCP dependency with `pip install -e ".[mcp]"`. An
+initialized MCP `ClientSession` can then be discovered and registered through
+the existing governed ToolManager, so scopes, timeouts, retries and audit
+records also apply to remote tools.
+
+```python
+from usagi_agent.tools import MCPToolSource
+
+source = MCPToolSource(
+    session,
+    artifact_manager=runtime.persistence.artifact_manager,
+    name_prefix="browser_",
+    spec_overrides={
+        "screenshot": {"required_scopes": ("browser.read",)},
+    },
+)
+await runtime.tool_manager.load_source(source)
+```
+
+MCP image results are stored as Artifacts and returned as typed image content
+parts; base64 payloads are not retained in graph state or conversation memory.
+
 ## Current pipeline and memory implementation
 
 Each stage keeps its mandatory orchestration in `PipelineProcessor`. Repeated,

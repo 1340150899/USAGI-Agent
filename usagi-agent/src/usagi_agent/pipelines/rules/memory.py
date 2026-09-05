@@ -1,20 +1,25 @@
 """Framework recall rules: each source parses and emits one RecallBundle."""
 from __future__ import annotations
 
+import json
 from typing import Literal
 
 from usagi_agent.kernel.context import RunContext
-from usagi_agent.pipelines.artifacts import get_text, put_recall_bundle
+from usagi_agent.pipelines.artifacts import get_model, put_recall_bundle
 from usagi_agent.pipelines.rules.recall import RecallAdapterConfig
 from usagi_agent.pipelines.rules.stage_type import StageType
 from usagi_agent.pipelines.rules.stage import RecallRuleInput, RecallRuleOutput
 from usagi_agent.types.context import RecallQuery
+from usagi_agent.types.run import RunInputEnvelope
 
 
 async def _query_text(input: RecallRuleInput, runtime) -> str:
-    return await get_text(
-        runtime.persistence.artifact_manager, input.normalized_input_ref
+    envelope = await get_model(
+        runtime.persistence.artifact_manager, input.request_ref, RunInputEnvelope
     )
+    if envelope is None:
+        raise RuntimeError("missing run input envelope artifact")
+    return json.dumps(envelope.input, ensure_ascii=False)
 
 
 async def _emit(

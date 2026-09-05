@@ -514,7 +514,7 @@ class AgentLoopState(TypedDict, total=False):
     final_output_ref: FinalOutputRef | None
 
 class AgentPassState(TypedDict, total=False):
-    normalized_input_ref: ArtifactRef
+    request_ref: ArtifactRef  # 完整请求的唯一输入引用；业务 JSON/媒体 Payload 不进 State
     recall_plan_ref: ArtifactRef
     recall_bundle_ref: ArtifactRef
     context_pack_ref: ContextPackRef

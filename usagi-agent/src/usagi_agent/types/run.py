@@ -13,6 +13,7 @@ from typing import Annotated, Literal, Union
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from usagi_agent.types.refs import ArtifactRef
+from usagi_agent.types.content import ContentPart
 
 
 class CancellationReasonCode(str, Enum):
@@ -134,6 +135,15 @@ class RunStartRequest(BaseModel):
     scenario_key: str
     request_idempotency_key: str
     input: BaseModel
+    content_parts: list[ContentPart] = Field(default_factory=list)
+    options: RunOptions = Field(default_factory=RunOptions)
+
+
+class RunInputEnvelope(BaseModel):
+    """The input-bearing subset loaded from the complete request Artifact."""
+
+    input: dict[str, object] = Field(default_factory=dict)
+    content_parts: list[ContentPart] = Field(default_factory=list)
     options: RunOptions = Field(default_factory=RunOptions)
 
 

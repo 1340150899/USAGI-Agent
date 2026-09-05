@@ -20,6 +20,7 @@ from usagi_agent.types.refs import (
     ToolObservationRef,
     SettlementArtifactRef,
 )
+from usagi_agent.types.content import ContentPart
 
 
 class SafeErrorRecord(BaseModel):
@@ -73,6 +74,7 @@ class ToolObservation(BaseModel):
     tool_call_id: str = ""
     status: Literal["success", "denied", "failed", "unknown"]
     output: dict[str, object] | None = None
+    content_parts: list[ContentPart] = Field(default_factory=list)
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
     error_code: str | None = None
     error_message: str | None = None

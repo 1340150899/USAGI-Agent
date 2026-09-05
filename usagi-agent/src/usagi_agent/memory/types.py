@@ -5,7 +5,13 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, computed_field, Field, model_validator
+
+from usagi_agent.types.content import (
+    ContentPart,
+    merge_content_parts,
+    text_from_content_parts,
+)
 
 
 class MemoryExtractionTrigger(StrEnum):
@@ -17,9 +23,29 @@ class RawEvent(BaseModel):
     event_id: str
     session_id: str
     role: Literal["user", "assistant", "tool", "system"]
-    content: str
+    content_parts: list[ContentPart] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_content(cls, value: object) -> object:
+        """Read persisted pre-migration events without keeping two truths."""
+        if not isinstance(value, dict) or "content" not in value:
+            return value
+        migrated = dict(value)
+        legacy_text = str(migrated.pop("content") or "")
+        migrated["content_parts"] = merge_content_parts(
+            text=legacy_text,
+            parts=migrated.get("content_parts") or (),
+        )
+        return migrated
+
+    @computed_field
+    @property
+    def search_text(self) -> str:
+        """Derived projection for indexing, recall and token accounting."""
+        return text_from_content_parts(self.content_parts)
 
 
 class SessionContext(BaseModel):

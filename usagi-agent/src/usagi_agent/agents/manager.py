@@ -7,10 +7,12 @@ from collections import defaultdict
 from decimal import Decimal
 from typing import Literal
 
-from usagi_agent.agents.model_adapters import (
-    OpenAICompatibleModelAdapter,
-    ScriptedModelAdapter,
+from usagi_agent.agents.model_adapter_factory import (
+    ModelAdapterCacheKey,
+    create_model_adapter,
+    model_adapter_cache_key,
 )
+from usagi_agent.agents.model_adapters import ScriptedModelAdapter
 from usagi_agent.agents.spec import AgentSpec
 from usagi_agent.api.errors import DuplicateAgentError, UnknownAgentError
 from usagi_agent.ports import HealthStatus, ModelAdapter, ToolContext
@@ -26,7 +28,7 @@ class AgentManager:
         self._model_adapter: ModelAdapter | None = (
             ScriptedModelAdapter() if model_execution_mode == "scripted" else None
         )
-        self._live_adapters: dict[str, OpenAICompatibleModelAdapter] = {}
+        self._live_adapters: dict[ModelAdapterCacheKey, ModelAdapter] = {}
         self._usage_by_agent: dict[str, ModelUsage] = defaultdict(ModelUsage)
 
     def create_agent(
@@ -88,11 +90,12 @@ class AgentManager:
         self._record_usage(agent_id, priced)
         return response
 
-    def _live_adapter_for(self, spec: ModelSpec) -> OpenAICompatibleModelAdapter:
-        adapter = self._live_adapters.get(spec.id)
+    def _live_adapter_for(self, spec: ModelSpec) -> ModelAdapter:
+        key = model_adapter_cache_key(spec)
+        adapter = self._live_adapters.get(key)
         if adapter is None:
-            adapter = OpenAICompatibleModelAdapter(spec)
-            self._live_adapters[spec.id] = adapter
+            adapter = create_model_adapter(spec)
+            self._live_adapters[key] = adapter
         return adapter
 
     def _record_usage(self, agent_id: str, usage: ModelUsage) -> None:

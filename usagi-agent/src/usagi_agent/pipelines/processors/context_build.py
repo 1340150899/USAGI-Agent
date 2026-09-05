@@ -18,6 +18,7 @@ from usagi_agent.pipelines.processors.base import StageProcessor
 from usagi_agent.pipelines.rules.stage import ContextBuildStagePatch, RuleExecutionError
 from usagi_agent.prompts import CONTEXT_COMPACTION_PROMPT, prompt_for_agent
 from usagi_agent.tools import AllowlistSelector, to_model_tool
+from usagi_agent.types.content import model_content_from_parts
 from usagi_agent.types.model import ModelRequest
 from usagi_agent.types.refs import ArtifactRef
 
@@ -307,7 +308,7 @@ class ContextBuildProcessor(StageProcessor):
                 {
                     "event_id": event.event_id,
                     "role": event.role,
-                    "content": event.content,
+                    "content": model_content_from_parts(event.content_parts),
                     "metadata": event.metadata,
                 }
                 for event in events_to_compact
@@ -359,7 +360,7 @@ class ContextBuildProcessor(StageProcessor):
     def _event_to_message(event) -> dict[str, object]:
         message: dict[str, object] = {
             "role": event.role,
-            "content": event.content,
+            "content": model_content_from_parts(event.content_parts),
         }
         if event.role == "assistant":
             calls = event.metadata.get("tool_calls")

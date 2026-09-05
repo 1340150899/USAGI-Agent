@@ -6,6 +6,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from usagi_agent.types.settlement import WriteSafetyMode
+from usagi_agent.types.content import ContentPart
+from usagi_agent.types.refs import ArtifactRef
 
 ToolErrorCode = Literal[
     "tool.invalid_arguments",  # arguments failed the declared parameter schema
@@ -38,6 +40,14 @@ class ToolSpec(BaseModel):
     adapter_kind: Literal["python", "http", "mcp"] = "python"
     execution_env: Literal["in_process", "sandbox"] = "in_process"
     required_scopes: tuple[str, ...] = ()
+
+
+class ToolAdapterResult(BaseModel):
+    """Rich adapter result before ToolManager forms a governed observation."""
+
+    output: dict[str, object] = Field(default_factory=dict)
+    content_parts: list[ContentPart] = Field(default_factory=list)
+    artifact_refs: list[ArtifactRef] = Field(default_factory=list)
 
 
 def to_model_tool(spec: ToolSpec) -> dict[str, object]:

@@ -32,7 +32,7 @@ class RecallProcessor(StageProcessor):
         self, state: AgentRunState, context: RunContext
     ) -> RecallStagePatch:
         rule_input = RecallRuleInput(
-            normalized_input_ref=state.get("normalized_input_ref", ""),
+            request_ref=state.get("request_ref", ""),
             recall_plan_ref=state.get("recall_plan_ref", ""),
             recall_cache=state.get("recall_cache", {}),
         )

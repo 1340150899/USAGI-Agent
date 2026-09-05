@@ -9,6 +9,7 @@ from usagi_agent.ports.context import HealthStatus, ToolContext
 from usagi_agent.types.context import LongTermMemoryCandidate, RecallQuery
 from usagi_agent.types.policy import MemoryCandidate
 from usagi_agent.types.refs import MemoryRef
+from usagi_agent.types.content import ContentPart
 from usagi_agent.memory.types import (
     ContextPolicy, LongTermMemory, MemoryExtractionRequest, PreparedContext,
     RawEvent, SessionContext, ToolObservationMemory,
@@ -25,7 +26,9 @@ class MemoryMutationResult(BaseModel):
 @runtime_checkable
 class MemoryManager(Protocol):
     async def append_event(
-        self, *, session_id: str, role: str, content: str, ctx: ToolContext,
+        self, *, session_id: str,
+        role: Literal["user", "assistant", "tool", "system"],
+        content_parts: list[ContentPart], ctx: ToolContext,
         metadata: dict[str, object] | None = None,
         operation_id: str | None = None,
     ) -> RawEvent: ...

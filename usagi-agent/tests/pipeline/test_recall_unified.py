@@ -15,6 +15,7 @@ from usagi_agent.registry import BootstrapSettings
 from usagi_agent.server import Server, ServiceRuntimeInitializer
 from usagi_agent.tools import ToolAdapter, ToolSpec
 from usagi_agent.types.context import LongTermMemoryCandidate, RecallQuery
+from usagi_agent.types.content import TextContentPart
 from usagi_agent.types.model import ModelRequest, ModelResponse, ModelToolCall, ModelUsage
 from usagi_agent.types.refs import PrincipalRef
 from usagi_agent.types.run import RunOptions, RunStartRequest
@@ -241,7 +242,8 @@ async def test_long_term_crosses_sessions_short_term_does_not(tmp_path):
     # Session A: raw events, then compaction distills a summary.
     for value in ("alpha " * 20, "beta " * 20, "gamma " * 20):
         await manager.append_event(
-            session_id="session-a", role="user", content=value, ctx=ctx
+            session_id="session-a", role="user",
+            content_parts=[TextContentPart(text=value)], ctx=ctx
         )
     session_a = await manager.get_session_context("session-a", ctx)
     older = session_a.recent_event_ids[:2]
@@ -258,7 +260,8 @@ async def test_long_term_crosses_sessions_short_term_does_not(tmp_path):
 
     # Session B: one unrelated event, same principal.
     await manager.append_event(
-        session_id="session-b", role="user", content="unrelated question", ctx=ctx
+        session_id="session-b", role="user",
+        content_parts=[TextContentPart(text="unrelated question")], ctx=ctx
     )
 
     # Long-term: the distilled summary crosses sessions.
@@ -272,7 +275,7 @@ async def test_long_term_crosses_sessions_short_term_does_not(tmp_path):
     )
 
     # Raw and working memory stay session-local and are not recall sources.
-    assert [event.content for event in await manager.list_events("session-b", ctx)] == [
+    assert [event.search_text for event in await manager.list_events("session-b", ctx)] == [
         "unrelated question"
     ]
     assert len(await manager.list_events("session-a", ctx)) == 3
@@ -287,13 +290,17 @@ async def test_compacted_raw_events_remain_archived_but_leave_working_memory(tmp
 
     old = await manager.append_event(
         session_id=session, role="user",
-        content="the alpha weather station reported rain", ctx=ctx,
+        content_parts=[TextContentPart(
+            text="the alpha weather station reported rain"
+        )], ctx=ctx,
     )
     await manager.append_event(
-        session_id=session, role="assistant", content="noted the report", ctx=ctx
+        session_id=session, role="assistant",
+        content_parts=[TextContentPart(text="noted the report")], ctx=ctx
     )
     current = await manager.append_event(
-        session_id=session, role="user", content="current weather question", ctx=ctx
+        session_id=session, role="user",
+        content_parts=[TextContentPart(text="current weather question")], ctx=ctx
     )
     # Compact the two older events out of the recent window.
     session_ctx = await manager.get_session_context(session, ctx)

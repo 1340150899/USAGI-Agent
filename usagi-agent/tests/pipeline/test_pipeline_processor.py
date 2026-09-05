@@ -34,6 +34,7 @@ from usagi_agent.server.runtime import ServerRuntime
 from usagi_agent.agents.spec import AgentSpec
 from usagi_agent.types.refs import PrincipalRef
 from usagi_agent.types.context import RecallQuery
+from usagi_agent.types.content import TextContentPart
 from usagi_agent.types.model import ModelRequest
 
 
@@ -44,7 +45,7 @@ class _FirstPreRecallRule(PreRecallAdapterConfig):
         self, input: PreRecallRuleInput, runtime, context
     ) -> PreRecallRuleOutput:
         self.calls.append(self.name)
-        return PreRecallRuleOutput(normalized_input_ref="normalized")
+        return PreRecallRuleOutput(recall_plan_ref="first-plan")
 
 
 class _SecondPreRecallRule(PreRecallAdapterConfig):
@@ -54,7 +55,7 @@ class _SecondPreRecallRule(PreRecallAdapterConfig):
         self, input: PreRecallRuleInput, runtime, context
     ) -> PreRecallRuleOutput:
         self.calls.append(self.name)
-        assert input.normalized_input_ref == "normalized"
+        assert input.recall_plan_ref == "first-plan"
         return PreRecallRuleOutput(recall_plan_ref="plan")
 
 
@@ -125,13 +126,12 @@ async def test_stage_processor_runs_all_rules_in_order_with_accumulated_state():
     )
 
     patch = await processor.process(
-        AgentRunState(normalized_input_ref="input"),
+        AgentRunState(request_ref="request"),
         _context(),
     )
 
     assert cast(_FirstPreRecallRule, pipeline.pre_recall[0]).calls == ["first"]
     assert cast(_SecondPreRecallRule, pipeline.pre_recall[1]).calls == ["second"]
-    assert patch.get("normalized_input_ref") == "normalized"
     assert patch.get("recall_plan_ref") == "plan"
     assert patch.get("recall_cache") == {}
     assert patch.get("model_response_ref") == ""
@@ -180,7 +180,7 @@ async def test_rule_returns_only_error_information_and_stops_the_stage():
 
     with pytest.raises(SafeError) as captured:
         await processor.process(
-            AgentRunState(normalized_input_ref="input"), _context()
+            AgentRunState(request_ref="request"), _context()
         )
 
     assert captured.value.reason_code == "rule.failed"
@@ -235,7 +235,7 @@ def test_compaction_request_batches_an_oldest_prefix_within_model_window():
             event_id=f"event-{index}",
             session_id="thread",
             role="user",
-            content=str(index) * 300,
+            content_parts=[TextContentPart(text=str(index) * 300)],
         )
         for index in range(4)
     ]
@@ -273,7 +273,7 @@ def test_compaction_request_rejects_one_event_larger_than_model_window():
                 event_id="huge",
                 session_id="thread",
                 role="user",
-                content="x" * 3_000,
+                content_parts=[TextContentPart(text="x" * 3_000)],
             )
         ],
     )
@@ -338,7 +338,7 @@ async def test_llm_compaction_is_applied_then_restarts_the_pipeline(
         await runtime.memory_manager.append_event(
             session_id=context.thread_id,
             role="user",
-            content=value,
+            content_parts=[TextContentPart(text=value)],
             ctx=tool_context,
         )
 
@@ -370,7 +370,7 @@ async def test_llm_compaction_is_applied_then_restarts_the_pipeline(
         for hit in long_term
     )
     assert any(
-        "alpha" in event.content
+        "alpha" in event.search_text
         for event in await runtime.memory_manager.list_events(
             context.thread_id, tool_context
         )

@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from usagi_agent.agents import AgentManager, AgentManagerInitializer, AgentSpec
 from usagi_agent.kernel.context import RunContext
-from usagi_agent.models import GLM_5_2_MODEL, ModelSpec
+from usagi_agent.models import GLM_5_2_MODEL, GLM_5_3_FLASH_MODEL, ModelSpec
 from usagi_agent.registry import BootstrapSettings
 from usagi_agent.types.action import ToolAction
 from usagi_agent.types.model import ModelRequest, ModelResponse, ModelToolCall
@@ -26,6 +26,8 @@ def test_model_catalog_is_static_and_not_registered_in_agent_manager():
     )
     assert GLM_5_2_MODEL.provider_model == "glm-5.2"
     assert GLM_5_2_MODEL.base_url == "https://open.bigmodel.cn/api/paas/v4/"
+    assert GLM_5_3_FLASH_MODEL.provider_model == "glm-5.3-flash"
+    assert GLM_5_3_FLASH_MODEL.input_modalities == frozenset({"text", "image"})
     assert not hasattr(manager, "register_model")
     assert not hasattr(manager, "get_model")
 

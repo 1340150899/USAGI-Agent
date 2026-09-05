@@ -6,7 +6,7 @@ from typing import Literal, TypedDict
 from pydantic import BaseModel, ConfigDict, Field
 
 class PreRecallStagePatch(TypedDict, total=False):
-    normalized_input_ref: str
+    context_compaction_mode: str
     recall_plan_ref: str
     recall_cache: dict[str, str]
     context_pack_ref: str
@@ -78,17 +78,18 @@ class RuleExecutionError(_StageData):
 
 class PreRecallRuleInput(_StageData):
     request_ref: str = ""
-    normalized_input_ref: str = ""
     recall_plan_ref: str = ""
+    iteration: int = 0
 
 
 class PreRecallRuleOutput(_StageData):
-    normalized_input_ref: str | None = None
     recall_plan_ref: str | None = None
+    context_compaction_mode: Literal["auto", "force"] | None = None
+    side_effect_receipt_refs: tuple[str, ...] = ()
 
 
 class RecallRuleInput(_StageData):
-    normalized_input_ref: str = ""
+    request_ref: str = ""
     recall_plan_ref: str = ""
     recall_cache: dict[str, str] = Field(default_factory=dict)
 

@@ -32,9 +32,11 @@ from usagi_agent.persistence.ports.execution import (
 from usagi_agent.ports.context import HealthStatus, ToolContext
 from usagi_agent.tools.adapter import ToolAdapter
 from usagi_agent.tools.validation import validate_arguments
+from usagi_agent.ports.tool import ToolSource
 from usagi_agent.types.action import ToolObservation
+from usagi_agent.types.content import ContentPart
 from usagi_agent.types.refs import ArtifactRef
-from usagi_agent.types.tool import ToolSpec
+from usagi_agent.types.tool import ToolAdapterResult, ToolSpec
 
 _SETTLED = ("settled_success", "settled_failure")
 
@@ -79,6 +81,16 @@ class ToolManager:
     def register_many(self, adapters: Iterable[ToolAdapter]) -> None:
         for adapter in adapters:
             self.register(adapter)
+
+    async def load_source(self, source: ToolSource) -> tuple[ToolAdapter, ...]:
+        """Discover and register every adapter from a dynamic tool source."""
+        loaded = await source.load()
+        adapters = tuple(loaded)
+        for adapter in adapters:
+            if not isinstance(adapter, ToolAdapter):
+                raise TypeError("tool source returned a non-ToolAdapter value")
+        self.register_many(adapters)
+        return adapters
 
     def resolve(self, name: str) -> ToolAdapter:
         try:
@@ -164,12 +176,15 @@ class ToolManager:
                 )
 
         outcome = await self._execute_with_budget(adapter, spec, arguments, context)
+        result = outcome[1]
         observation = self._observation(
             name,
             tool_call_id,
             started,
             outcome[0],
-            output=outcome[1],
+            output=result.output if result is not None else None,
+            content_parts=result.content_parts if result is not None else None,
+            artifact_refs=result.artifact_refs if result is not None else None,
             error_code=outcome[2],
             error_message=outcome[3],
         )
@@ -182,19 +197,23 @@ class ToolManager:
         spec: ToolSpec,
         arguments: dict[str, object],
         context: ToolContext,
-    ) -> tuple[str, dict[str, object] | None, str | None, str | None]:
+    ) -> tuple[str, ToolAdapterResult | None, str | None, str | None]:
         """Run the adapter under concurrency/timeout with read-class retry."""
 
         attempts = spec.max_retries + 1 if spec.risk == "read" else 1
         semaphore = self._semaphores.get(spec.name)
 
-        async def _run_once() -> dict[str, object]:
+        async def _run_once() -> ToolAdapterResult:
             raw = await adapter.execute(arguments, context)
+            if isinstance(raw, ToolAdapterResult):
+                return raw
             if isinstance(raw, BaseModel):
-                return raw.model_dump(mode="json")
+                return ToolAdapterResult(output=raw.model_dump(mode="json"))
             if isinstance(raw, dict):
-                return dict(raw)
-            return {"_unserializable": type(raw).__name__}
+                return ToolAdapterResult(output=dict(raw))
+            return ToolAdapterResult(
+                output={"_unserializable": type(raw).__name__}
+            )
 
         for attempt in range(attempts):
             try:
@@ -231,7 +250,7 @@ class ToolManager:
                 return (
                     "failed", None, "tool.execution_failed", type(exc).__name__
                 )
-            return "success", self._truncate(spec, output), None, None
+            return "success", self._truncate_result(spec, output), None, None
         return (
             "failed", None, "tool.execution_failed", "retry budget exhausted"
         )
@@ -247,6 +266,12 @@ class ToolManager:
             "_original_bytes": len(payload.encode()),
             "preview": payload[:preview_budget],
         }
+
+    @classmethod
+    def _truncate_result(
+        cls, spec: ToolSpec, result: ToolAdapterResult
+    ) -> ToolAdapterResult:
+        return result.model_copy(update={"output": cls._truncate(spec, result.output)})
 
     # --------------------------------------------------------- execution records
 
@@ -376,6 +401,8 @@ class ToolManager:
         status: str,
         *,
         output: dict[str, object] | None = None,
+        content_parts: list[ContentPart] | None = None,
+        artifact_refs: list[ArtifactRef] | None = None,
         error_code: str | None = None,
         error_message: str | None = None,
     ) -> ToolObservation:
@@ -384,6 +411,8 @@ class ToolManager:
             tool_call_id=tool_call_id,
             status=status,  # type: ignore[arg-type]
             output=output,
+            content_parts=content_parts or [],
+            artifact_refs=artifact_refs or [],
             error_code=error_code,
             error_message=error_message,
             latency_ms=int((time.monotonic() - started) * 1000),

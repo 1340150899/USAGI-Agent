@@ -37,6 +37,7 @@ from usagi_agent.pipelines.rules.stage import (
 from usagi_agent.pipelines.rules.stage_type import StageType
 from usagi_agent.tools.render import render_model_content
 from usagi_agent.types.action import ToolAction, ToolObservation
+from usagi_agent.types.content import merge_content_parts
 
 if TYPE_CHECKING:
     from usagi_agent.server.runtime import ServerRuntime
@@ -113,7 +114,10 @@ class ToolExecutionRule(ResultProcessAdapterConfig):
             event = await runtime.memory_manager.append_event(
                 session_id=context.thread_id,
                 role="tool",
-                content=render_model_content(observation),
+                content_parts=merge_content_parts(
+                    text=render_model_content(observation),
+                    parts=observation.content_parts,
+                ),
                 ctx=context.to_tool_context(),
                 metadata={
                     "tool_name": action.tool_name,

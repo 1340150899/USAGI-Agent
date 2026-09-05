@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Literal
 from uuid import uuid4
 
 from usagi_agent.memory.store import MemoryStores
@@ -23,6 +23,7 @@ from usagi_agent.ports import HealthStatus, MemoryMutationResult, ToolContext
 from usagi_agent.types.context import LongTermMemoryCandidate, RecallQuery
 from usagi_agent.types.policy import MemoryCandidate
 from usagi_agent.types.refs import MemoryRef
+from usagi_agent.types.content import ContentPart
 
 class DefaultMemoryManager:
     """Owns raw events, session context, compaction, extraction and recall.
@@ -58,7 +59,9 @@ class DefaultMemoryManager:
         return ("long_term_memory", tenant_id, principal_id)
 
     async def append_event(
-        self, *, session_id: str, role: str, content: str, ctx: ToolContext,
+        self, *, session_id: str,
+        role: Literal["user", "assistant", "tool", "system"],
+        content_parts: list[ContentPart], ctx: ToolContext,
         metadata: dict[str, object] | None = None,
         operation_id: str | None = None,
     ) -> RawEvent:
@@ -79,11 +82,12 @@ class DefaultMemoryManager:
             return event
         event = RawEvent(
             event_id=event_id, session_id=session_id,
-            role=role, content=content, metadata=metadata or {},  # type: ignore[arg-type]
+            role=role, content_parts=content_parts,
+            metadata=metadata or {},  # type: ignore[arg-type]
         )
         await self.stores.raw_conversations.aput(
             self._events_ns(session_id, ctx), event.event_id,
-            event.model_dump(mode="json"), index=["content"],
+            event.model_dump(mode="json"), index=["search_text"],
         )
         session = await self.get_session_context(session_id, ctx)
         session.recent_event_ids.append(event.event_id)
@@ -131,7 +135,7 @@ class DefaultMemoryManager:
         structured_tokens = estimate_tokens(structured_state)
         estimated = (
             structured_tokens + estimate_tokens(session.summary)
-            + sum(estimate_tokens(e.content) for e in recent)
+            + sum(estimate_tokens(e.search_text) for e in recent)
         )
         threshold = min(
             int(policy.context_window * policy.compression_threshold),
@@ -146,7 +150,7 @@ class DefaultMemoryManager:
         kept: list[RawEvent] = []
         kept_tokens = 0
         for event in reversed(recent):
-            size = estimate_tokens(event.content)
+            size = estimate_tokens(event.search_text)
             if kept and kept_tokens + size > policy.recent_message_tokens:
                 break
             kept.append(event)
@@ -398,7 +402,7 @@ class DefaultMemoryManager:
         """Incremental extractor + global deduplicating resolver."""
         result: list[LongTermMemory] = []
         for event in events:
-            content = event.content.strip()
+            content = event.search_text.strip()
             if not content or event.role in ("system", "tool"):
                 # Tool events are persisted as dedicated tool_observation
                 # candidates by ToolExecutionRule; extracting them here too

@@ -6,6 +6,7 @@ from usagi_agent.pipelines.rules.context_build import (
 from usagi_agent.pipelines.rules.end import EndAdapterConfig
 from usagi_agent.pipelines.rules.model import ModelRuleAdapterConfig
 from usagi_agent.pipelines.rules.model_execution import ModelExecutionRule
+from usagi_agent.pipelines.rules.input_normalization import RunInputNormalizationRule
 from usagi_agent.pipelines.rules.memory import (
     LongTermMemoryRecallRule,
     ToolObservationRecallRule,
@@ -34,6 +35,7 @@ __all__ = [
     "ContextFilterAdapterConfig", "ContextRankAdapterConfig",
     "EndAdapterConfig", "ModelRuleAdapterConfig", "ModelExecutionRule",
     "LongTermMemoryRecallRule",
+    "RunInputNormalizationRule",
     "PreRecallAdapterConfig", "RecallAdapterConfig", "ResultProcessAdapterConfig",
     "ToolExecutionRule", "ToolObservationRecallRule",
     "EndRuleInput", "EndRuleOutput", "ModelRuleInput", "ModelRuleOutput",

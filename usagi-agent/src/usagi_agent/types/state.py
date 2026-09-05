@@ -10,7 +10,6 @@ RUN_SCOPED_STATE_FIELDS = frozenset(
     {
         "run_id",
         "request_ref",
-        "normalized_input_ref",
         "context_compaction_mode",
         "iteration",
         "tool_call_count",
@@ -70,7 +69,6 @@ class AgentRunState(TypedDict, total=False):
     # Run-scoped fields.
     run_id: str
     request_ref: str
-    normalized_input_ref: str
     context_compaction_mode: str
     iteration: Annotated[int, last_write]
     tool_call_count: Annotated[int, last_write]

@@ -9,8 +9,8 @@ from typing import cast
 
 from pydantic import BaseModel
 
-from usagi_agent.agents.model_adapters import OpenAICompatibleModelAdapter
-from usagi_agent.models import GLM_5_2_MODEL
+from usagi_agent.agents import create_model_adapter
+from usagi_agent.models import GLM_5_3_FLASH_MODEL
 from usagi_agent.kernel.context import RunContext
 from usagi_agent.pipelines import ScenarioPipelineInitializer
 from usagi_agent.pipelines.artifacts import get_text
@@ -35,7 +35,7 @@ class _VisibleLiveAdapter:
     adapter_ref = "usagi.live_smoke_visible_adapter"
 
     def __init__(self, model_spec) -> None:
-        self._adapter = OpenAICompatibleModelAdapter(model_spec)
+        self._adapter = create_model_adapter(model_spec)
 
     async def generate(self, request, ctx):
         try:
@@ -71,7 +71,7 @@ async def main() -> None:
             id="research_writer",
             input_schema="usagi.agent_request@1.0.0",
             output_schema="usagi.final_output@1.0.0",
-            model=GLM_5_2_MODEL.model_copy(
+            model=GLM_5_3_FLASH_MODEL.model_copy(
                 update={
                     # A small framework budget triggers the real compaction path,
                     # while still fitting one prompt-bounded compaction batch.

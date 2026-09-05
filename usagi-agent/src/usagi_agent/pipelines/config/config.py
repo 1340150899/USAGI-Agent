@@ -5,6 +5,7 @@ from usagi_agent.pipelines.rules import (
     EndAdapterConfig,
     ModelRuleAdapterConfig,
     ModelExecutionRule,
+    RunInputNormalizationRule,
     PreRecallAdapterConfig,
     RecallAdapterConfig,
     ResultProcessAdapterConfig,
@@ -15,7 +16,9 @@ from usagi_agent.types.budget import Budget
 class AgentPipelineConfig(BaseModel):
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
-    pre_recall: tuple[PreRecallAdapterConfig, ...] = ()
+    pre_recall: tuple[PreRecallAdapterConfig, ...] = Field(
+        default_factory=lambda: (RunInputNormalizationRule(),)
+    )
     recall: tuple[RecallAdapterConfig, ...] = ()
     context_build: ContextBuildPipelineConfig = Field(
         default_factory=ContextBuildPipelineConfig

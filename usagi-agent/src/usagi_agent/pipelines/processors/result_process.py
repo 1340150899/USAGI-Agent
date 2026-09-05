@@ -41,6 +41,7 @@ from usagi_agent.types.context import (
     ContextUpdate,
     LongTermMemoryCandidate,
 )
+from usagi_agent.types.content import merge_content_parts
 from usagi_agent.types.model import ModelResponse, ModelToolCall
 from usagi_agent.types.refs import ArtifactRef
 
@@ -248,7 +249,7 @@ class ResultProcessProcessor(StageProcessor):
         event = await self.runtime.memory_manager.append_event(
             session_id=context.thread_id,
             role="assistant",
-            content=response.content or "",
+            content_parts=merge_content_parts(text=response.content),
             ctx=context.to_tool_context(),
             metadata=metadata,
             operation_id=event_operation_id,

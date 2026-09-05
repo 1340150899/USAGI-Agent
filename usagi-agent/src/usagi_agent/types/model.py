@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from usagi_agent.types.refs import ArtifactRef
+
+ModelInputModality = Literal["text", "image"]
+ModelProtocol = Literal["openai_chat", "openai_responses"]
 
 
 class ModelUsage(BaseModel):
@@ -20,12 +24,22 @@ class ModelSpec(BaseModel):
 
     id: str
     provider_model: str
+    protocol: ModelProtocol = "openai_chat"
+    input_modalities: frozenset[ModelInputModality] = frozenset({"text"})
     base_url: str | None = None
     api_key_env: str = "OPENAI_API_KEY"
     context_window: int = 128_000
     default_max_output_tokens: int = 4_096
     input_cost_per_million: Decimal = Decimal("0")
     output_cost_per_million: Decimal = Decimal("0")
+    store_provider_response: bool = Field(
+        default=False,
+        description="Allow the provider to retain generated response objects.",
+    )
+    extra_body: dict[str, object] = Field(
+        default_factory=dict,
+        description="Provider-specific OpenAI-compatible request extensions.",
+    )
 
 
 class ModelRequest(BaseModel):

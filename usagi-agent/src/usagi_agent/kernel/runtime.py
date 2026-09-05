@@ -14,10 +14,12 @@ mutable run state itself (§3.4: Agent/stateless, State externalized).
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
 import uuid
+from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator
 
@@ -87,6 +89,9 @@ def _client_fingerprint(tenant_id: str, namespace: str, request: RunStartRequest
             "namespace": namespace,
             "scenario": request.scenario_key,
             "input": request.input.model_dump(mode="json"),
+            "content_parts": [
+                part.model_dump(mode="json") for part in request.content_parts
+            ],
             "deadline": request.options.absolute_deadline.isoformat()
             if request.options.absolute_deadline
             else None,
@@ -366,7 +371,13 @@ class KernelRuntime:
         thread_id = run_id
 
         # Persist input as a quarantined Artifact (§10.5).
-        input_bytes = request.input.model_dump_json().encode()
+        # Persist the complete request as one opaque ingress payload. Kernel does
+        # not inspect or split business fields and content parts; PreRecall owns
+        # that normalization.
+        # ``input`` is declared as BaseModel so ingress can accept any business
+        # schema. Serialize the concrete subtype instead of BaseModel's empty
+        # declared shape.
+        input_bytes = request.model_dump_json(serialize_as_any=True).encode()
         owner = ArtifactOwner(tenant_id=self._tenant, erasure_scope_id=_new_id("scope"))
 
         async def _payload():
@@ -444,23 +455,48 @@ class KernelRuntime:
                 ),
             }
         }
-        # The authoritative AgentRunState starts with run-scoped request data.
+        # Pass one opaque request reference into the graph. PreRecall owns all
+        # interpretation of business fields, modalities and request options.
         input_state = {
             "request_ref": input_ref.artifact_id,
             "run_id": run_id,
-            "context_compaction_mode": request.options.context_compaction,
         }
 
+        heartbeat = asyncio.create_task(
+            self._keep_lease_alive(run_id, state.lease_owner or "", state.fencing_token)
+        )
         try:
             result = await scenario.compiled_graph.ainvoke(input_state, config)
         except Exception as exc:
             reason = [type(exc).__name__]
             await self._rcm.to_failed(run_id, reason)
             return
+        finally:
+            heartbeat.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat
 
         snapshot = await self._ports.execution_context_store.get(run_id)
         assert snapshot is not None
         await self._finish_graph_result(run_id, scenario, config, result, snapshot, input_ref)
+
+    async def _keep_lease_alive(
+        self, run_id: str, owner: str, fencing_token: int
+    ) -> None:
+        """Renew the run lease while the graph executes (§10.6).
+
+        Long model calls can exceed one lease TTL between checkpoint writes;
+        without renewal the fenced checkpointer rejects the next write. The
+        checkpointer stays the final arbiter: if the lease is genuinely lost
+        (cancellation, takeover), renewal stops and the gate rejects the write.
+        """
+        interval = max(1.0, _LEASE_TTL_SECONDS / 3)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self._lease.renew(run_id, owner, fencing_token)
+            except (LeaseLost, UsagiError):
+                return
 
     async def _finish_graph_result(
         self, run_id: str, scenario, config: dict[str, Any], result: Any,

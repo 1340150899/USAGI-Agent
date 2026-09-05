@@ -7,6 +7,7 @@ from usagi_agent.memory.manager import DefaultMemoryManager
 from usagi_agent.memory.types import ContextPolicy
 from usagi_agent.ports import GovernedExecutionContext, ToolContext
 from usagi_agent.types.context import LongTermMemoryCandidate, RecallQuery
+from usagi_agent.types.content import TextContentPart
 from usagi_agent.types.refs import PrincipalRef
 
 
@@ -28,7 +29,8 @@ async def test_compaction_keeps_raw_events_and_extracts_incrementally(tmp_path: 
     ctx = _ctx()
     for value in ("alpha " * 20, "beta " * 20, "gamma " * 20):
         await manager.append_event(
-            session_id="session", role="user", content=value, ctx=ctx
+            session_id="session", role="user",
+            content_parts=[TextContentPart(text=value)], ctx=ctx
         )
 
     prepared = await manager.prepare_context(
@@ -113,14 +115,14 @@ async def test_append_event_operation_id_is_stable_on_replay(tmp_path: Path):
     first = await manager.append_event(
         session_id="session",
         role="user",
-        content="hello",
+        content_parts=[TextContentPart(text="hello")],
         ctx=ctx,
         operation_id="memory:user-event:run",
     )
     replayed = await manager.append_event(
         session_id="session",
         role="user",
-        content="hello",
+        content_parts=[TextContentPart(text="hello")],
         ctx=ctx,
         operation_id="memory:user-event:run",
     )
@@ -136,23 +138,26 @@ async def test_raw_and_short_term_are_principal_and_session_isolated(tmp_path: P
     bob = _ctx("bob")
 
     alice_event = await manager.append_event(
-        session_id="same-id", role="user", content="alice private", ctx=alice
+        session_id="same-id", role="user",
+        content_parts=[TextContentPart(text="alice private")], ctx=alice
     )
     await manager.append_event(
-        session_id="other-session", role="user", content="alice other", ctx=alice
+        session_id="other-session", role="user",
+        content_parts=[TextContentPart(text="alice other")], ctx=alice
     )
     await manager.append_event(
-        session_id="same-id", role="user", content="bob private", ctx=bob
+        session_id="same-id", role="user",
+        content_parts=[TextContentPart(text="bob private")], ctx=bob
     )
 
-    assert [event.content for event in await manager.list_events("same-id", alice)] == [
+    assert [event.search_text for event in await manager.list_events("same-id", alice)] == [
         "alice private"
     ]
-    assert [event.content for event in await manager.list_events("same-id", bob)] == [
+    assert [event.search_text for event in await manager.list_events("same-id", bob)] == [
         "bob private"
     ]
     assert [
-        event.content for event in await manager.list_events("other-session", alice)
+        event.search_text for event in await manager.list_events("other-session", alice)
     ] == ["alice other"]
     assert (
         await manager.get_session_context("same-id", alice)
@@ -164,10 +169,12 @@ async def test_short_term_summary_is_not_implicitly_promoted(tmp_path: Path):
     manager = DefaultMemoryManager(path=tmp_path / "memory.json")
     ctx = _ctx()
     old = await manager.append_event(
-        session_id="session", role="user", content="temporary alpha progress", ctx=ctx
+        session_id="session", role="user",
+        content_parts=[TextContentPart(text="temporary alpha progress")], ctx=ctx
     )
     await manager.append_event(
-        session_id="session", role="user", content="current request", ctx=ctx
+        session_id="session", role="user",
+        content_parts=[TextContentPart(text="current request")], ctx=ctx
     )
 
     await manager.apply_compaction(

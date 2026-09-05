@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from pydantic import BaseModel
 
 from usagi_agent.ports.context import HealthStatus, ToolContext
-from usagi_agent.types.tool import ToolSpec
+from usagi_agent.types.tool import ToolAdapterResult, ToolSpec
 
 
 class ToolAdapter(ABC):
@@ -17,7 +17,7 @@ class ToolAdapter(ABC):
     @abstractmethod
     async def execute(
         self, arguments: dict[str, object], context: ToolContext
-    ) -> BaseModel | dict[str, object]:
+    ) -> BaseModel | dict[str, object] | ToolAdapterResult:
         raise NotImplementedError
 
     async def health(self) -> HealthStatus:
