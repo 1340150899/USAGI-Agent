@@ -21,6 +21,7 @@ from collections.abc import Iterable
 from contextlib import suppress
 from datetime import datetime, timezone
 from hashlib import sha256
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
@@ -38,6 +39,9 @@ from usagi_agent.types.action import ToolObservation
 from usagi_agent.types.content import ContentPart
 from usagi_agent.types.refs import ArtifactRef
 from usagi_agent.types.tool import ToolAdapterResult, ToolSpec
+
+if TYPE_CHECKING:
+    from usagi_agent.tools.mcp import MCPServerConfig
 
 _SETTLED = ("settled_success", "settled_failure")
 
@@ -83,6 +87,24 @@ class ToolManager:
     def register_many(self, adapters: Iterable[ToolAdapter]) -> None:
         for adapter in adapters:
             self.register(adapter)
+
+    async def register_mcp(
+        self, config: MCPServerConfig
+    ) -> tuple[ToolAdapter, ...]:
+        """Connect and register one MCP server from its public configuration.
+
+        This is the application-facing MCP entry point. The manager constructs
+        the source with its own ArtifactManager, discovers the remote tools, and
+        owns the connection until ``shutdown()``.
+        """
+
+        from usagi_agent.tools.mcp import MCPServerSource
+
+        source = MCPServerSource(
+            config,
+            artifact_manager=self._artifact_manager,
+        )
+        return await self.load_source(source)
 
     async def load_source(self, source: ToolSource) -> tuple[ToolAdapter, ...]:
         """Discover and register every adapter from a dynamic tool source."""

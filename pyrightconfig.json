@@ -2,10 +2,13 @@
   "include": [
     "usagi-agent/src",
     "usagi-agent/tests",
+    "usagi-agent/scripts/live_xhs_smoke.py",
+    "apps/xhs-autopost",
     "examples"
   ],
   "extraPaths": [
     "usagi-agent/src",
-    "usagi-agent"
+    "usagi-agent",
+    "apps/xhs-autopost"
   ]
 }

@@ -43,10 +43,10 @@ agents and scenarios, so normal tool allow-list validation remains fail-fast.
 from pydantic import SecretStr
 from usagi_agent.registry import BootstrapSettings
 from usagi_agent.server import ServiceRuntimeInitializer
-from usagi_agent.tools.mcp import MCPServerConfig, MCPServerSource
+from usagi_agent.tools import MCPServerConfig
 
 runtime = ServiceRuntimeInitializer.init(BootstrapSettings())
-source = MCPServerSource(
+tools = await runtime.tool_manager.register_mcp(
     MCPServerConfig(
         name="remote",
         transport="streamable_http",
@@ -62,10 +62,8 @@ source = MCPServerSource(
                 "write_safety": "at_most_once_manual",
             },
         },
-    ),
-    artifact_manager=runtime.persistence.artifact_manager,
+    )
 )
-await runtime.tool_manager.load_source(source)
 ```
 
 Streamable HTTP also supports a private CA bundle, mutual-TLS certificate/key,

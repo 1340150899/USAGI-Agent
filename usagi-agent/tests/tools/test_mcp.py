@@ -17,8 +17,8 @@ from usagi_agent.persistence.inmemory.artifact import (
 )
 from usagi_agent.ports import GovernedExecutionContext, ToolContext
 from usagi_agent.policies.engine import DefaultPolicyEngine
-from usagi_agent.tools import ToolManager
-from usagi_agent.tools.mcp import MCPServerConfig, MCPServerSource, MCPToolSource
+from usagi_agent.tools import MCPServerConfig, ToolManager
+from usagi_agent.tools.mcp import MCPServerSource, MCPToolSource
 from usagi_agent.types.refs import PrincipalRef
 
 
@@ -144,10 +144,9 @@ async def test_real_stdio_server_connects_discovers_executes_and_closes():
         command=sys.executable,
         args=(str(fixture),),
     )
-    source = MCPServerSource(config, artifact_manager=artifacts)
     manager = ToolManager(artifact_manager=artifacts)
     try:
-        adapters = await manager.load_source(source)
+        adapters = await manager.register_mcp(config)
         assert [adapter.spec.name for adapter in adapters] == [
             "fixture__echo",
             "fixture__change_value",
@@ -168,11 +167,11 @@ async def test_real_stdio_server_connects_discovers_executes_and_closes():
         assert observation.status == "success"
         assert observation.output is not None
         assert observation.output["echo"] == "hello"
-        assert (await source.health()) == "healthy"
+        assert (await manager.health())["mcp:fixture"] == "healthy"
     finally:
         await manager.shutdown()
 
-    assert (await source.health()) == "unhealthy"
+    assert (await manager.health())["mcp:fixture"] == "unhealthy"
 
 
 @pytest.mark.asyncio

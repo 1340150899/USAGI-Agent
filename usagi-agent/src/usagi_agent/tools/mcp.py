@@ -503,7 +503,7 @@ class MCPServerSource(MCPToolSource):
     """Connect, discover and own one configured MCP server."""
 
     def __init__(
-        self, config: MCPServerConfig, *, artifact_manager: ArtifactManager
+        self, config: MCPServerConfig, *, artifact_manager: ArtifactManager | None
     ) -> None:
         self.name = f"mcp:{config.name}"
         self.connection = MCPConnection(config)
