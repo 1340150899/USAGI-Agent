@@ -1,0 +1,17 @@
+[Unit]
+Description=Xiaohongshu MCP for USAGI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=usagi
+WorkingDirectory=/opt/usagi
+# Install the pinned package and configure its browser/login as this user first.
+ExecStart=/usr/bin/npx --yes xhs-mcp@0.8.13 mcp --mode http --port 3000
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from usagi_agent.ports import ToolContext
 from usagi_agent.tools.adapter import ToolAdapter
-from usagi_agent.types.tool import ToolSpec
+from usagi_agent.tools.spec import CALCULATOR_SPEC
 
 _BINARY = {
     ast.Add: operator.add,
@@ -36,16 +36,7 @@ def _evaluate(node: ast.AST) -> Decimal:
 
 
 class CalculatorTool(ToolAdapter):
-    spec = ToolSpec(
-        name="calculator",
-        description="Evaluate a basic arithmetic expression.",
-        parameters={
-            "type": "object",
-            "properties": {"expression": {"type": "string", "description": "Arithmetic expression"}},
-            "required": ["expression"],
-            "additionalProperties": False,
-        },
-    )
+    spec = CALCULATOR_SPEC
 
     async def execute(self, arguments: dict[str, object], context: ToolContext) -> dict[str, object]:
         expression = str(arguments["expression"])

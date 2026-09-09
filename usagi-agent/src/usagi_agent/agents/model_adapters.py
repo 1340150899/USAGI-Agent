@@ -73,7 +73,9 @@ class ScriptedModelAdapter:
                 finish_reason="stop",
                 usage=ModelUsage(input_tokens=10, output_tokens=5),
             )
-        if request.tools and run_id not in self._tool_used_by_run:
+        if request.tools and run_id not in self._tool_used_by_run and not any(
+            message.get("role") == "tool" for message in request.messages
+        ):
             self._tool_used_by_run.add(run_id)
             function = request.tools[0].get("function", {})
             if not isinstance(function, dict):

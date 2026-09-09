@@ -24,6 +24,7 @@ class GovernedExecutionContext(BaseModel):
     control_kind: Literal["run", "erasure", "memory_maintenance", "reconciliation"]
     control_id: str
     fencing_token: int
+    session_id: str | None = None
 
 
 class DataAccessContext(BaseModel):

@@ -1,9 +1,10 @@
-import json
+import sqlite3
 from pathlib import Path
 
 import pytest
 
 from usagi_agent.memory.manager import DefaultMemoryManager
+from usagi_agent.memory.store import MemoryStores
 from usagi_agent.memory.types import ContextPolicy
 from usagi_agent.ports import GovernedExecutionContext, ToolContext
 from usagi_agent.types.context import LongTermMemoryCandidate, RecallQuery
@@ -24,8 +25,8 @@ def _ctx(principal: str = "user") -> ToolContext:
 
 @pytest.mark.asyncio
 async def test_compaction_keeps_raw_events_and_extracts_incrementally(tmp_path: Path):
-    path = tmp_path / "memory.json"
-    manager = DefaultMemoryManager(path=path)
+    path = tmp_path / "memory.db"
+    manager = DefaultMemoryManager(MemoryStores.sqlite(path))
     ctx = _ctx()
     for value in ("alpha " * 20, "beta " * 20, "gamma " * 20):
         await manager.append_event(
@@ -85,31 +86,22 @@ async def test_compaction_keeps_raw_events_and_extracts_incrementally(tmp_path: 
     )
     assert not any(hit.content.startswith("alpha alpha") for hit in recalled)
 
-    # A new manager proves the data is in the JSON-backed LangGraph store, not RAM.
-    reopened = DefaultMemoryManager(path=path)
+    # A new manager proves the data is persisted in SQLite, not process memory.
+    reopened = DefaultMemoryManager(MemoryStores.sqlite(path))
     assert (await reopened.get_session_context("session", ctx)).compacted_until
 
-    # The configured base path fans out into lifecycle-specific physical stores.
-    paths = {
-        layer: tmp_path / f"memory.{layer}.json"
-        for layer in ("raw", "short", "long")
-    }
-    assert all(path.exists() for path in paths.values())
-    namespaces = {
-        layer: {
-            tuple(row["namespace"])
-            for row in json.loads(path.read_text(encoding="utf-8"))["items"]
-        }
-        for layer, path in paths.items()
-    }
-    assert all(ns[0] == "raw_conversations" for ns in namespaces["raw"])
-    assert all(ns[0] == "short_term_memory" for ns in namespaces["short"])
-    assert all(ns[0] == "long_term_memory" for ns in namespaces["long"])
+    with sqlite3.connect(path) as database:
+        assert database.execute(
+            "SELECT COUNT(*) FROM short_term_memory"
+        ).fetchone()[0]
+        assert database.execute(
+            "SELECT COUNT(*) FROM long_term_memory"
+        ).fetchone()[0]
 
 
 @pytest.mark.asyncio
 async def test_append_event_operation_id_is_stable_on_replay(tmp_path: Path):
-    manager = DefaultMemoryManager(path=tmp_path / "memory.json")
+    manager = DefaultMemoryManager(MemoryStores.sqlite(tmp_path / "memory.db"))
     ctx = _ctx()
 
     first = await manager.append_event(
@@ -132,8 +124,26 @@ async def test_append_event_operation_id_is_stable_on_replay(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_weixin_uid_with_period_is_valid_memory_identity(tmp_path: Path):
+    manager = DefaultMemoryManager(MemoryStores.sqlite(tmp_path / "memory.db"))
+    ctx = _ctx("user@im.wechat")
+
+    await manager.append_event(
+        session_id="session.with.period",
+        role="user",
+        content_parts=[TextContentPart(text="hello")],
+        ctx=ctx,
+    )
+
+    assert [
+        event.search_text
+        for event in await manager.list_events("session.with.period", ctx)
+    ] == ["hello"]
+
+
+@pytest.mark.asyncio
 async def test_raw_and_short_term_are_principal_and_session_isolated(tmp_path: Path):
-    manager = DefaultMemoryManager(path=tmp_path / "memory.json")
+    manager = DefaultMemoryManager(MemoryStores.sqlite(tmp_path / "memory.db"))
     alice = _ctx("alice")
     bob = _ctx("bob")
 
@@ -166,7 +176,7 @@ async def test_raw_and_short_term_are_principal_and_session_isolated(tmp_path: P
 
 @pytest.mark.asyncio
 async def test_short_term_summary_is_not_implicitly_promoted(tmp_path: Path):
-    manager = DefaultMemoryManager(path=tmp_path / "memory.json")
+    manager = DefaultMemoryManager(MemoryStores.sqlite(tmp_path / "memory.db"))
     ctx = _ctx()
     old = await manager.append_event(
         session_id="session", role="user",

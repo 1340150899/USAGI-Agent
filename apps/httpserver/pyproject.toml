@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "usagi-httpserver"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["usagi-agent[sqlite,mcp]", "fastapi>=0.115", "uvicorn>=0.30", "httpx>=0.27"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["usagi_httpserver*"]

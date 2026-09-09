@@ -39,7 +39,7 @@ class RunInputNormalizationRule(PreRecallAdapterConfig):
         normalized = json.dumps(envelope.input, ensure_ascii=False).encode()
         operation_id = f"memory:user-event:{context.run_id}"
         event = await runtime.memory_manager.append_event(
-            session_id=context.thread_id,
+            session_id=context.memory_session_id,
             role="user",
             content_parts=merge_content_parts(
                 text=normalized.decode(), parts=envelope.content_parts

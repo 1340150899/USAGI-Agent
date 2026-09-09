@@ -1,9 +1,6 @@
-"""Public Runtime type re-exports.
-
-The ``AgentRuntime`` Protocol lives in :mod:`usagi_agent.kernel.runtime` and is added to
-``__all__`` once that module is built (Layer 4). The lifecycle types below are stable now.
-"""
+"""Public authentication and run-lifecycle value types."""
 from usagi_agent.kernel.context import AuthContext, RunContext
+from usagi_agent.sessions.types import SessionMessage
 from usagi_agent.types.run import (
     CancellationReasonCode,
     ResumeEnvelope,
@@ -26,4 +23,5 @@ __all__ = [
     "RunOptions",
     "RunOutcome",
     "RunStartRequest",
+    "SessionMessage",
 ]

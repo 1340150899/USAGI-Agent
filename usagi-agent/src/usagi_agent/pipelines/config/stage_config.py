@@ -23,7 +23,7 @@ RESEARCH_WRITER_SCENARIO = ScenarioConfig(
         ),
         model=(ModelExecutionRule(),),
         result_process=(ToolExecutionRule(), CompactionApplyRule()),
-        max_passes=5,
+        max_passes=100,
         max_tool_calls=10,
         max_delegations=0,
         budget=Budget(

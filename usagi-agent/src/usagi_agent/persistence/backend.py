@@ -1,31 +1,29 @@
-"""Persistence backend selection + init (design §24.1, §7.1 step1).
+"""SQLite persistence initialization (design §24.1, §7.1 step1).
 
 ``PersistenceInitializer`` is the second node of the init tree (after observability). It
-constructs an :class:`InfrastructurePorts` bundle — concrete store instances for the
-selected backend (InMemory dev or SQLite durable). Stores are *constructed* here only;
-no Run-time execution logic lives in this module.
+constructs an :class:`InfrastructurePorts` bundle backed by one SQLite database.
+Stores are *constructed* here only; no Run-time execution logic lives in this module.
 
-The fencing-gate verifier is produced here so the FencedCheckpointer can verify the live
-RunControl lease on every checkpoint write without depending on the RunControlStore type
-directly (decoupling: the checkpointer takes a callable, not a Store).
+The in-memory classes imported below are reference state-machine implementations wrapped
+by transactional SQLite adapters; they are not a selectable persistence backend.
 """
 from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Awaitable, Callable
+from pathlib import Path
+from typing import Awaitable, Callable, TypeVar, cast
+
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from usagi_agent.observability import ObservabilityProvider
 from usagi_agent.persistence.inmemory import (
-    InMemoryArtifactBlobStore,
-    InMemoryArtifactManager,
     InMemoryArtifactMetadataStore,
     InMemoryAuditStore,
     InMemoryErasureControlStore,
     InMemoryExecutionContextStore,
-    InMemoryFencedCheckpointer,
     InMemoryInterruptCredentialStore,
     InMemoryKeyDestructionStore,
     InMemoryLineageIndex,
@@ -34,7 +32,6 @@ from usagi_agent.persistence.inmemory import (
     InMemoryOutboxStore,
     InMemoryApprovalStore,
     InMemoryResumeAttemptStore,
-    InMemoryRunControlStore,
     InMemoryRunStartRequestStore,
     InMemorySecretStore,
     InMemoryToolExecutionStore,
@@ -46,7 +43,6 @@ from usagi_agent.persistence.ports.artifact import (
     ArtifactManager,
     ArtifactMetadataStore,
 )
-from usagi_agent.persistence.ports.checkpointer import BaseCheckpointSaver
 from usagi_agent.persistence.ports.erasure import (
     ErasureControlStore,
     KeyDestructionStore,
@@ -68,9 +64,18 @@ from usagi_agent.persistence.ports.execution import (
     ToolExecutionStore,
 )
 from usagi_agent.persistence.ports.secret import SecretStore
+from usagi_agent.persistence.ports.session import SessionStore
 from usagi_agent.types.settlement import FencingGate
 
 GateVerifier = Callable[[FencingGate], Awaitable[bool]]
+StoreT = TypeVar("StoreT")
+
+
+def _sqlite_store(path: str, name: str, factory: Callable[[], StoreT]) -> StoreT:
+    """Create a durable proxy while preserving its wrapped store's static type."""
+    from usagi_agent.persistence.sqlite.stores import SqliteStore
+
+    return cast(StoreT, SqliteStore(path, name, factory))
 
 
 @dataclass
@@ -91,6 +96,7 @@ class InfrastructurePorts:
     outbox_store: OutboxStore
     event_bus: EventBus
     secret_store: SecretStore
+    session_store: SessionStore
     artifact_manager: ArtifactManager
     artifact_metadata_store: ArtifactMetadataStore
     artifact_blob_store: ArtifactBlobStore
@@ -155,9 +161,7 @@ class PersistenceInitializer:
 
     @staticmethod
     def init(settings, observability: ObservabilityProvider) -> InfrastructurePorts:
-        if settings.persistence_backend == "sqlite":
-            return PersistenceInitializer._build_sqlite(settings)
-        return PersistenceInitializer._build_inmemory(settings, with_durable_note=False)
+        return PersistenceInitializer._build_sqlite(settings)
 
     @staticmethod
     def _build_sqlite(settings) -> InfrastructurePorts:
@@ -165,76 +169,51 @@ class PersistenceInitializer:
         # verifies (SQL) reads authoritative rows written by the store (§10.6, §2.3).
         from usagi_agent.persistence.sqlite.fenced_checkpointer import SqliteFencedCheckpointer
         from usagi_agent.persistence.sqlite.run_control_store import SqliteRunControlStore
+        from usagi_agent.persistence.sqlite.session_store import SqliteSessionStore
 
-        db_path = settings.sqlite_path or ":memory:"
+        import sqlite3
+        from usagi_agent.persistence.sqlite.schema import apply_schema
+
+        for configured_path in settings.all_sqlite_paths():
+            with sqlite3.connect(configured_path) as connection:
+                apply_schema(connection)
+        db_path = settings.selected_sqlite_path()
+        assert db_path is not None
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         run_control_store = SqliteRunControlStore(db_path)
         checkpointer = SqliteFencedCheckpointer(db_path)  # verifies gate via SQL internally
         gate_verifier = make_run_gate_verifier(run_control_store)
 
-        blob = InMemoryArtifactBlobStore()
-        meta = InMemoryArtifactMetadataStore()
-        artifact_manager = InMemoryArtifactManager(meta, blob)
+        from usagi_agent.persistence.sqlite.stores import SqliteBlobStore, SqliteArtifactManager
+        blob = SqliteBlobStore(db_path)
+        meta = _sqlite_store(db_path, "artifact_metadata", InMemoryArtifactMetadataStore)
+        artifact_manager = SqliteArtifactManager(meta, blob)
 
-        # TODO(§10.6, M0B): durable SQLite impls for the remaining stores. For now they
-        # remain in-process; the durability-critical run_control + checkpointer are durable.
+        # Persist the reference state machines transactionally. EventBus remains
+        # an in-process hint; durable stores are authoritative during recovery.
         return InfrastructurePorts(
             checkpointer=checkpointer,
-            run_start_request_store=InMemoryRunStartRequestStore(),
-            execution_context_store=InMemoryExecutionContextStore(),
+            run_start_request_store=_sqlite_store(db_path, "run_start_request_store", InMemoryRunStartRequestStore),
+            execution_context_store=_sqlite_store(db_path, "execution_context_store", InMemoryExecutionContextStore),
             run_control_store=run_control_store,
-            resume_attempt_store=InMemoryResumeAttemptStore(),
-            interrupt_credential_store=InMemoryInterruptCredentialStore(),
-            usage_ledger=InMemoryUsageLedger(),
-            audit_store=InMemoryAuditStore(),
-            approval_store=InMemoryApprovalStore(),
-            tool_execution_store=InMemoryToolExecutionStore(),
-            model_invocation_store=InMemoryModelInvocationStore(),
-            outbox_store=InMemoryOutboxStore(),
+            resume_attempt_store=_sqlite_store(db_path, "resume_attempt_store", InMemoryResumeAttemptStore),
+            interrupt_credential_store=_sqlite_store(db_path, "interrupt_credential_store", InMemoryInterruptCredentialStore),
+            usage_ledger=_sqlite_store(db_path, "usage_ledger", InMemoryUsageLedger),
+            audit_store=_sqlite_store(db_path, "audit_store", InMemoryAuditStore),
+            approval_store=_sqlite_store(db_path, "approval_store", InMemoryApprovalStore),
+            tool_execution_store=_sqlite_store(db_path, "tool_execution_store", InMemoryToolExecutionStore),
+            model_invocation_store=_sqlite_store(db_path, "model_invocation_store", InMemoryModelInvocationStore),
+            outbox_store=_sqlite_store(db_path, "outbox_store", InMemoryOutboxStore),
             event_bus=InMemoryEventBus(),
-            secret_store=InMemorySecretStore(),
+            secret_store=_sqlite_store(db_path, "secret_store", InMemorySecretStore),
+            session_store=SqliteSessionStore(db_path),
             artifact_manager=artifact_manager,
             artifact_metadata_store=meta,
             artifact_blob_store=blob,
-            memory_store=InMemoryMemoryStore(),
-            vector_store=InMemoryVectorStore(),
-            lineage_index=InMemoryLineageIndex(),
-            key_destruction_store=InMemoryKeyDestructionStore(),
-            erasure_control_store=InMemoryErasureControlStore(),
-            run_gate_verifier=gate_verifier,
-        )
-
-    @staticmethod
-    def _build_inmemory(settings, *, with_durable_note: bool) -> InfrastructurePorts:
-        run_control_store = InMemoryRunControlStore()
-        gate_verifier = make_run_gate_verifier(run_control_store)
-        checkpointer = InMemoryFencedCheckpointer(gate_verifier=gate_verifier)
-
-        blob = InMemoryArtifactBlobStore()
-        meta = InMemoryArtifactMetadataStore()
-        artifact_manager = InMemoryArtifactManager(meta, blob)
-
-        return InfrastructurePorts(
-            checkpointer=checkpointer,
-            run_start_request_store=InMemoryRunStartRequestStore(),
-            execution_context_store=InMemoryExecutionContextStore(),
-            run_control_store=run_control_store,
-            resume_attempt_store=InMemoryResumeAttemptStore(),
-            interrupt_credential_store=InMemoryInterruptCredentialStore(),
-            usage_ledger=InMemoryUsageLedger(),
-            audit_store=InMemoryAuditStore(),
-            approval_store=InMemoryApprovalStore(),
-            tool_execution_store=InMemoryToolExecutionStore(),
-            model_invocation_store=InMemoryModelInvocationStore(),
-            outbox_store=InMemoryOutboxStore(),
-            event_bus=InMemoryEventBus(),
-            secret_store=InMemorySecretStore(),
-            artifact_manager=artifact_manager,
-            artifact_metadata_store=meta,
-            artifact_blob_store=blob,
-            memory_store=InMemoryMemoryStore(),
-            vector_store=InMemoryVectorStore(),
-            lineage_index=InMemoryLineageIndex(),
-            key_destruction_store=InMemoryKeyDestructionStore(),
-            erasure_control_store=InMemoryErasureControlStore(),
+            memory_store=_sqlite_store(db_path, "memory_store", InMemoryMemoryStore),
+            vector_store=_sqlite_store(db_path, "vector_store", InMemoryVectorStore),
+            lineage_index=_sqlite_store(db_path, "lineage_index", InMemoryLineageIndex),
+            key_destruction_store=_sqlite_store(db_path, "key_destruction_store", InMemoryKeyDestructionStore),
+            erasure_control_store=_sqlite_store(db_path, "erasure_control_store", InMemoryErasureControlStore),
             run_gate_verifier=gate_verifier,
         )

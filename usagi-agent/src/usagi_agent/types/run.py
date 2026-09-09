@@ -132,6 +132,8 @@ class RunHandle(BaseModel):
 
 
 class RunStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     scenario_key: str
     request_idempotency_key: str
     input: BaseModel

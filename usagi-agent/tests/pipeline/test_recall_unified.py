@@ -7,12 +7,13 @@ import pytest
 from pydantic import BaseModel
 
 from usagi_agent.memory.manager import DefaultMemoryManager
+from usagi_agent.memory.store import MemoryStores
 from usagi_agent.models import GLM_5_2_MODEL
 from usagi_agent.pipelines import ScenarioPipelineInitializer
 from usagi_agent.pipelines.config.stage_config import SCENARIO_CONFIGS
 from usagi_agent.ports import GovernedExecutionContext, ToolContext
 from usagi_agent.registry import BootstrapSettings
-from usagi_agent.server import Server, ServiceRuntimeInitializer
+from usagi_agent.server import Server, ServerRuntime, ServiceRuntimeInitializer
 from usagi_agent.tools import ToolAdapter, ToolSpec
 from usagi_agent.types.context import LongTermMemoryCandidate, RecallQuery
 from usagi_agent.types.content import TextContentPart
@@ -46,7 +47,7 @@ class _WeatherTool(ToolAdapter):
 
     @property
     def spec(self) -> ToolSpec:  # noqa: A003 - ToolAdapter contract
-        return ToolSpec(
+        return ToolSpec(requires_approval=False,
             name="weather_lookup",
             description="Look up weather",
             parameters={
@@ -116,11 +117,11 @@ class _CaptureThenFinalModel:
         return "healthy"
 
 
-def _build_server(model, tmp_path) -> tuple[Server, ServerRuntimeInitializer]:
+def _build_server(model, tmp_path) -> tuple[Server, ServerRuntime]:
     runtime = ServiceRuntimeInitializer.init(
         BootstrapSettings(
             model_execution_mode="scripted",
-            memory_path=str(tmp_path / "memory.json"),
+            sqlite_path=str(tmp_path / "runtime.db"),
         )
     )
     runtime.agent_manager.set_model_adapter(model)
@@ -168,13 +169,13 @@ async def _run_context(runtime, handle) -> ToolContext:
 async def test_tool_result_recalled_into_next_run_model_request(tmp_path):
     first_model = _ScriptedToolThenFinalModel(tool_call_count=1)
     server, _ = _build_server(first_model, tmp_path)
-    first = await server.start_agent(_request("recall-first", "weather in paris"))
+    first = await server.create_session(_request("recall-first", "weather in paris"))
     assert (await server.get_run(first.run_id)).kind == "completed"
 
     # A brand-new run/thread must see the previous run's tool result.
     second_model = _CaptureThenFinalModel()
     server.runtime.agent_manager.set_model_adapter(second_model)
-    second = await server.start_agent(_request("recall-second", "what is the weather"))
+    second = await server.create_session(_request("recall-second", "what is the weather"))
     assert (await server.get_run(second.run_id)).kind == "completed"
 
     assert len(second_model.requests) == 1
@@ -194,7 +195,7 @@ async def test_tool_result_recalled_into_next_run_model_request(tmp_path):
 async def test_same_tool_and_args_supersedes_to_freshest_result(tmp_path):
     model = _ScriptedToolThenFinalModel(tool_call_count=2)
     server, runtime = _build_server(model, tmp_path)
-    handle = await server.start_agent(_request("recall-supersede", "weather paris"))
+    handle = await server.create_session(_request("recall-supersede", "weather paris"))
     assert (await server.get_run(handle.run_id)).kind == "completed"
 
     hits = await runtime.memory_manager.get_tool_observations(
@@ -213,11 +214,11 @@ async def test_final_does_not_sediment_raw_events(tmp_path):
     """Final must leave long-term storage untouched: no raw-event extraction."""
     model = _ScriptedToolThenFinalModel(tool_call_count=1)
     server, runtime = _build_server(model, tmp_path)
-    handle = await server.start_agent(_request("recall-no-extract", "weather paris"))
+    handle = await server.create_session(_request("recall-no-extract", "weather paris"))
     assert (await server.get_run(handle.run_id)).kind == "completed"
 
     ctx = await _run_context(runtime, handle)
-    session = await runtime.memory_manager.get_session_context(handle.thread_id, ctx)
+    session = await runtime.memory_manager.get_session_context(handle.session_id, ctx)
     assert session.extracted_until is None, "no compaction happened in this run"
 
     generic = await runtime.memory_manager.get_long_term_memories(
@@ -236,7 +237,7 @@ async def test_final_does_not_sediment_raw_events(tmp_path):
 @pytest.mark.asyncio
 async def test_long_term_crosses_sessions_short_term_does_not(tmp_path):
     """Recall-scope contract: LTM is cross-session, STM is session-only."""
-    manager = DefaultMemoryManager(path=tmp_path / "memory.json")
+    manager = DefaultMemoryManager(MemoryStores.sqlite(tmp_path / "memory.db"))
     ctx = _tool_context(principal="isolation-user")
 
     # Session A: raw events, then compaction distills a summary.
@@ -284,7 +285,7 @@ async def test_long_term_crosses_sessions_short_term_does_not(tmp_path):
 
 @pytest.mark.asyncio
 async def test_compacted_raw_events_remain_archived_but_leave_working_memory(tmp_path):
-    manager = DefaultMemoryManager(path=str(tmp_path / "memory.json"))
+    manager = DefaultMemoryManager(MemoryStores.sqlite(tmp_path / "memory.db"))
     ctx = _tool_context(principal="history-user")
     session = "history-thread"
 

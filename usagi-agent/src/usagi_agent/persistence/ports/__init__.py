@@ -64,6 +64,7 @@ from usagi_agent.persistence.ports.run_lifecycle import (
     RunStartRequestStore,
 )
 from usagi_agent.persistence.ports.secret import SecretStore
+from usagi_agent.persistence.ports.session import SessionRecord, SessionStatus, SessionStore, UserRecord
 
 __all__ = [
     "AuditFact",
@@ -119,4 +120,8 @@ __all__ = [
     "RunStartRequestRecord",
     "RunStartRequestStore",
     "SecretStore",
+    "SessionRecord",
+    "SessionStatus",
+    "SessionStore",
+    "UserRecord",
 ]

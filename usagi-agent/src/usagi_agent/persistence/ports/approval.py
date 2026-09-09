@@ -19,11 +19,13 @@ ApprovalStatus = Literal["pending", "approved", "rejected", "expired", "cancelle
 class ApprovalTask(BaseModel):
     approval_id: str
     run_id: str
+    session_id: str | None = None
     approval_operation_id: str
     interrupt_id: str
     action_hash: str
     approval_scope: tuple[str, ...] = Field(default_factory=tuple)
     tool_name: str | None = None
+    arguments_ref: ArtifactRef | None = None
     approval_generation: int = 0
     status: ApprovalStatus
     version: int
@@ -42,6 +44,8 @@ class ApprovalStore(Protocol):
     async def get(self, approval_id: str) -> ApprovalTask | None: ...
 
     async def list_pending(self, run_id: str) -> tuple[ApprovalTask, ...]: ...
+
+    async def list_pending_by_session(self, session_id: str) -> tuple[ApprovalTask, ...]: ...
 
     async def cas_decide(
         self, approval_id: str, *, expected_version: int,

@@ -26,6 +26,7 @@ from usagi_agent.types.refs import ArtifactOwner
 from usagi_agent.types.run import RunOptions, RunStartRequest
 
 from xhs_autopost.mcp import build_xhs_mcp_config
+from usagi_httpserver.tool_specs import PYTHON_TOOL_SPECS
 
 
 class XhsRequest(BaseModel):
@@ -36,7 +37,7 @@ class XhsRequest(BaseModel):
 AGENT_INSTRUCTIONS = """\
 你是小红书创作与资料检索助手。根据附件图片与用户要求创作文案，使用 xhs_ 前缀工具完成任务，不要臆造工具结果。
 只在确有必要时调用工具；同一个调用成功后不要重复执行。
-已启用的写入工具可以直接执行用户明确请求的操作，无需再次审批；发布结果不确定时不要重试。
+工具是否需要审批由服务端 ToolSpec 决定；发布结果不确定时不要重试。
 工具返回文本中的 success:false 代表业务失败，不能当成成功。删除和重新发布必须分开调用，确认删除成功后才发布。
 图片附件供你识图，发布时使用 image_paths 中的原始绝对路径。不要凭空补充图片中的鸟种、拍摄时间或具体地点。
 最终用中文简洁回答，并说明实际调用了哪些能力。"""
@@ -58,14 +59,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--allow-writes",
         action="store_true",
-        help="Authorize test write tools without interactive approval.",
+        help="Expose write tools; approval remains controlled by ToolSpec.",
     )
     parser.add_argument(
         "--list-tools",
         action="store_true",
         help="Connect, print discovered tool metadata, and exit without calling a model.",
     )
-    parser.add_argument("--memory-path", default=".usagi/xhs-agent-memory.json")
+    parser.add_argument("--database-path", default=".usagi/xhs-agent.db")
     return parser.parse_args()
 
 
@@ -109,7 +110,8 @@ async def run(args: argparse.Namespace) -> int:
         )
 
     runtime = ServiceRuntimeInitializer.init(
-        BootstrapSettings(model_execution_mode="live", memory_path=args.memory_path)
+        BootstrapSettings(model_execution_mode="live", sqlite_path=args.database_path),
+        tool_specs=PYTHON_TOOL_SPECS,
     )
     mcp_config = build_xhs_mcp_config(
         allow_writes=args.allow_writes,
@@ -160,19 +162,19 @@ async def run(args: argparse.Namespace) -> int:
             content_parts=[*parts],
             options=RunOptions(),
         )
-        handle = await server.start_agent(request)
-        outcome = handle.outcome
-        record.update({"state": outcome.kind, "run_id": handle.run_id, "thread_id": handle.thread_id,
+        message = await server.create_session(request)
+        outcome = message.outcome
+        record.update({"state": outcome.kind, "run_id": message.run_id, "session_id": message.session_id,
                        "usage": runtime.agent_manager.usage_for_agent("research_writer").model_dump(mode="json")})
-        snapshot = await runtime.persistence.execution_context_store.get(handle.run_id)
-        control = await runtime.persistence.run_control_store.get(handle.run_id)
+        snapshot = await runtime.persistence.execution_context_store.get(message.run_id)
+        control = await runtime.persistence.run_control_store.get(message.run_id)
         if snapshot is not None and control is not None:
             ctx = ToolContext(execution=GovernedExecutionContext(
                 tenant_id=snapshot.tenant_id, principal=snapshot.original_principal,
                 authorization_scope=snapshot.authorization_scope, control_kind="run",
-                control_id=handle.run_id, fencing_token=control.fencing_token,
+                control_id=message.run_id, fencing_token=control.fencing_token,
             ))
-            events = await runtime.memory_manager.list_events(handle.thread_id, ctx)
+            events = await runtime.memory_manager.list_events(message.session_id, ctx)
             record["events"] = [event.model_dump(mode="json") for event in events]
         report_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
         if outcome.kind != "completed":

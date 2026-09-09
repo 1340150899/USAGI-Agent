@@ -5,7 +5,7 @@ import inspect
 
 from pydantic import BaseModel, Field
 
-from usagi_agent.kernel.runtime import KernelRuntime
+from usagi_agent.kernel.runtime import _KernelRuntime
 from usagi_agent.ports import HealthStatus
 
 
@@ -22,6 +22,7 @@ class ServerRuntime:
         observability,
         persistence,
         agent_manager,
+        session_manager,
         tool_manager,
         memory_manager,
         policy_engine,
@@ -35,6 +36,7 @@ class ServerRuntime:
         self.observability = observability
         self.persistence = persistence
         self.agent_manager = agent_manager
+        self.session_manager = session_manager
         self.tool_manager = tool_manager
         self.memory_manager = memory_manager
         self.policy_engine = policy_engine
@@ -43,7 +45,7 @@ class ServerRuntime:
         self.scenario_registry = scenario_registry
         self.erasure_coordinator = erasure_coordinator
         self.kernel_components = kernel_components
-        self.kernel_runtime = KernelRuntime(self)
+        self._kernel_runtime = _KernelRuntime(self)
         self._closed = False
 
     def validate_ready(self) -> None:
@@ -56,6 +58,7 @@ class ServerRuntime:
         components: dict[str, HealthStatus] = {}
         for name, component in (
             ("agent_manager", self.agent_manager),
+            ("session_manager", self.session_manager),
             ("memory_manager", self.memory_manager),
             ("policy_engine", self.policy_engine),
             ("guardrail", self.guardrail),

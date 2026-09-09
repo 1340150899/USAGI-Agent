@@ -216,7 +216,7 @@ async def test_run_ingress_delivers_image_part_to_model_context(tmp_path):
     runtime = ServiceRuntimeInitializer.init(
         BootstrapSettings(
             model_execution_mode="scripted",
-            memory_path=str(tmp_path / "memory.json"),
+            sqlite_path=str(tmp_path / "runtime.db"),
         )
     )
     capture = _CaptureModel()
@@ -230,7 +230,7 @@ async def test_run_ingress_delivers_image_part_to_model_context(tmp_path):
     ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
     server = Server(runtime)
 
-    handle = await server.start_agent(
+    handle = await server.create_session(
         RunStartRequest(
             scenario_key="example.research_writer",
             request_idempotency_key="multimodal-ingress",

@@ -2,6 +2,21 @@
 
 Business-agnostic Agent engineering framework built on top of LangGraph.
 
+## Tool approval
+
+Every ToolSpec defaults to `requires_approval=True`, including read-only and MCP
+tools. Set it explicitly to False at registration to opt out. This is server-side
+metadata, never a model argument. Risk controls retries and write safety, not approval.
+
+ToolManager owns the gate. Pipeline nodes translate ToolApprovalRequired into
+LangGraph interrupt(); applications collect decisions through any channel and
+call Server.resume(). Arguments are stored as an Artifact for authenticated review.
+A direct manager without an approval store denies approval-required calls.
+SQLite persists approvals, execution contexts, idempotency records, tool results,
+artifacts and checkpoints. Configure a stable `resume_hmac_key` for restart recovery.
+The application runs one worker per data directory; pending approvals survive
+restart, while interrupted external side effects require reconciliation.
+
 ## Multimodal input
 
 Run requests can attach provider-neutral image parts by remote URL or by an
@@ -79,8 +94,9 @@ name collisions. Use `enabled_tools` as an explicit exposure allow-list.
 
 MCP annotations are treated only as untrusted hints. A tool is classified as
 read-only only when it explicitly advertises `readOnlyHint=true`; every other
-tool defaults to `high_risk_write` plus `at_most_once_manual`, which requires
-approval under the default policy. Pin trusted corrections in `spec_overrides`.
+tool defaults to `high_risk_write` plus `at_most_once_manual`. Every tool requires
+approval by default, independently of risk. Pin trusted corrections, including
+`requires_approval`, in `spec_overrides`.
 Configured environment variables and HTTP headers are stored as `SecretStr`
 values and are not shown in configuration representations.
 
@@ -119,8 +135,8 @@ installed by `AgentManagerInitializer`; the model stage only invokes the manager
 All memory behavior is behind `DefaultMemoryManager`: raw events, structured short-term
 session state, pre-call token measurement/rolling compaction, explicit and compaction-
 triggered long-term extraction, conflict resolution and recall. It depends only on
-LangGraph `BaseStore`; V1 uses `JsonFileStore` at `.usagi/memory.json`, so a database
-store can replace it without changing pipeline stages.
+LangGraph `BaseStore`; all four memory lifecycles are persisted in the configured
+SQLite database.
 
 See `docs/generic-agent-framework.md` for the authoritative design. This package is the
 framework Kernel + Capabilities + Ports; it must not contain any business concept

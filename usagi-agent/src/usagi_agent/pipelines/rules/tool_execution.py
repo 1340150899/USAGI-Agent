@@ -6,15 +6,14 @@ ToolRuntime.execute -> persist observation -> append the model-facing tool
 event -> persist a reusable observation candidate. Calls execute serially;
 the switch to bounded parallelism stays inside this rule and does not change
 the rule contract. Every failure becomes a reason-carrying observation fed
-back to the model — only a rejected approval or an ``unknown`` outcome
-terminates the pass.
+back to the model. Rejecting an approval denies only that action; remaining
+actions in the same model response continue through their own approval gates.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
@@ -27,7 +26,6 @@ from usagi_agent.pipelines.artifacts import (
     put_model,
     put_side_effect_receipt,
 )
-from usagi_agent.persistence.ports.approval import ApprovalTask
 from usagi_agent.pipelines.rules.result_process import ResultProcessAdapterConfig
 from usagi_agent.pipelines.rules.stage import (
     ResultProcessRuleInput,
@@ -41,13 +39,6 @@ from usagi_agent.types.content import merge_content_parts
 
 if TYPE_CHECKING:
     from usagi_agent.server.runtime import ServerRuntime
-
-
-class _Rejected:
-    """Sentinel: a human rejected approval; the pass terminates."""
-
-
-_REJECTED = _Rejected()
 
 
 @dataclass
@@ -82,13 +73,6 @@ class ToolExecutionRule(ResultProcessAdapterConfig):
             outcome = await self._execute_one(
                 action, runtime, context, operation_id=tool_operation_id
             )
-            if isinstance(outcome, _Rejected):
-                return ResultProcessRuleOutput(
-                    pass_disposition="run_failed",
-                    tool_observation_refs=tuple(observation_refs),
-                    reason_codes=("tool.approval_rejected",),
-                    side_effect_receipt_refs=tuple(receipt_refs),
-                )
             observation = outcome.observation
             ref = await put_model(
                 artifact_manager,
@@ -112,7 +96,7 @@ class ToolExecutionRule(ResultProcessAdapterConfig):
                 f"memory:tool-event:{context.run_id}:{action.tool_call_id}"
             )
             event = await runtime.memory_manager.append_event(
-                session_id=context.thread_id,
+                session_id=context.memory_session_id,
                 role="tool",
                 content_parts=merge_content_parts(
                     text=render_model_content(observation),
@@ -168,7 +152,7 @@ class ToolExecutionRule(ResultProcessAdapterConfig):
         context: RunContext,
         *,
         operation_id: str,
-    ) -> _ExecutionOutcome | _Rejected:
+    ) -> _ExecutionOutcome:
         tool_context = context.to_tool_context()
         arguments: dict[str, object] = dict(action.arguments)
         if action.arguments_error is not None:
@@ -204,62 +188,32 @@ class ToolExecutionRule(ResultProcessAdapterConfig):
                 ),
                 arguments=arguments,
             )
-        if decision.effect == "require_approval":
-            approval_id = f"approval_{context.run_id}_{action.tool_call_id}"
-            approval = await runtime.persistence.approval_store.get_or_create(
-                ApprovalTask(
-                    approval_id=approval_id,
-                    run_id=context.run_id,
-                    approval_operation_id=approval_id,
-                    interrupt_id=approval_id,
-                    action_hash=hashlib.sha256(
-                        action.model_dump_json().encode()
-                    ).hexdigest(),
-                    approval_scope=("tool.execute", action.tool_name),
-                    tool_name=action.tool_name,
-                    status="pending",
-                    version=0,
-                    created_at=datetime.now(timezone.utc),
+        from usagi_agent.tools.approval import ToolApprovalRequired
+
+        async def execute(approval_result=None):
+            return await runtime.tool_manager.execute(
+                name=action.tool_name, arguments=arguments, context=tool_context,
+                tool_call_id=action.tool_call_id, operation_id=operation_id,
+                approval_result=approval_result,
+            )
+
+        try:
+            observation = await execute()
+        except ToolApprovalRequired as pending:
+            resumed = interrupt(pending.payload())
+            if not await runtime.tool_manager.approvals.decide(pending, resumed):
+                return _ExecutionOutcome(
+                    observation=ToolObservation(
+                        tool_name=action.tool_name,
+                        tool_call_id=action.tool_call_id,
+                        status="denied",
+                        error_code="tool.approval_rejected",
+                        error_message="The user rejected this tool execution request.",
+                    ),
+                    arguments=arguments,
                 )
-            )
-            resumed = interrupt(
-                {
-                    "kind": "approval",
-                    "approval_id": approval.approval_id,
-                    "approval_version": approval.version,
-                    "approval_scope": approval.approval_scope,
-                    "action_hash": approval.action_hash,
-                    "tool_name": action.tool_name,
-                }
-            )
-            if not isinstance(resumed, dict) or (
-                resumed.get("kind") != "approval"
-                or resumed.get("approval_id") != approval.approval_id
-                or resumed.get("action_hash") != approval.action_hash
-                or tuple(resumed.get("approval_scope", ()))
-                != approval.approval_scope
-            ):
-                return _REJECTED
-            decided = await runtime.persistence.approval_store.cas_decide(
-                approval.approval_id,
-                expected_version=int(
-                    resumed.get("expected_approval_version", -1)
-                ),
-                decision=resumed.get("decision", "reject"),
-                evidence_ref=None,
-            )
-            if decided.status != "approved":
-                return _REJECTED
-        return _ExecutionOutcome(
-            observation=await runtime.tool_manager.execute(
-                name=action.tool_name,
-                arguments=arguments,
-                context=tool_context,
-                tool_call_id=action.tool_call_id,
-                operation_id=operation_id,
-            ),
-            arguments=arguments,
-        )
+            observation = await execute(resumed)
+        return _ExecutionOutcome(observation=observation, arguments=arguments)
 
     @staticmethod
     async def _persist_observation_candidate(

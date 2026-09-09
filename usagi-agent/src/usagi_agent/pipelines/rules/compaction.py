@@ -55,7 +55,7 @@ class CompactionApplyRule(ResultProcessAdapterConfig):
             return None
         operation_id = f"memory:compaction:{context.run_id}:{input.iteration}"
         session = await runtime.memory_manager.apply_compaction(
-            context.thread_id,
+            context.memory_session_id,
             envelope.compacted_event_ids,
             context.to_tool_context(),
             operation_id=operation_id,

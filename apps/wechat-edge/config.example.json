@@ -1,0 +1,13 @@
+{
+  "data_dir": ".usagi/edge",
+  "server_url": "https://YOUR_LINUX_HOST",
+  "token_env": "USAGI_WXAUTO_TOKEN",
+  "wxauto_module": "wxauto",
+  "account_ref": "desktop-main",
+  "self_ref": "owner-desktop",
+  "self_name": "REPLACE_WITH_SELF_DISPLAY_NAME",
+  "poll_seconds": 3,
+  "conversations": [
+    {"name": "REPLACE_WITH_CONTACT_NAME", "ref": "conversation-01", "sender_ref": "contact-01"}
+  ]
+}

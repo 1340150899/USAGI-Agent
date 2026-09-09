@@ -13,6 +13,7 @@ dist/
 
 # Virtual environments and local environment variables
 .venv/
+.venv-edge/
 venv/
 env/
 .env
@@ -35,3 +36,9 @@ usagi-agent/.usagi/
 Thumbs.db
 # pytest basetemp workaround (Windows temp perms)
 .pytest-tmp/
+node_modules/
+.usagi-edge/
+.usagi-weixin/
+apps/httpserver/config.json
+apps/weixin-adapter/config.json
+apps/wechat-edge/config.json

@@ -1,12 +1,11 @@
 """Default PolicyEngine + Guardrail (design §23).
 
 Policy is deterministic and versioned; the LLM cannot override it (§23.2). The default
-engine allows read actions and requires approval for high-risk writes. Guardrails are
+engine allows actions; the Tool module enforces ToolSpec.requires_approval. Guardrails are
 structured pass/fail (§23.3).
 """
 from __future__ import annotations
 
-from usagi_agent.api.errors import UnknownToolError
 from usagi_agent.ports import PolicyEngine, ToolCatalog, ToolContext
 from usagi_agent.types.policy import GuardrailResult, PolicyDecision
 from usagi_agent.types.refs import PrincipalRef
@@ -20,17 +19,6 @@ class DefaultPolicyEngine(PolicyEngine):
         self, *, principal: PrincipalRef, action: str, tool_name: str | None = None,
         arguments: dict | None = None, context: ToolContext,
     ) -> PolicyDecision:
-        if action == "tool.execute" and tool_name and self._tool_catalog is not None:
-            try:
-                risk = self._tool_catalog.get_spec(tool_name).risk
-            except UnknownToolError:
-                risk = None
-            if risk == "high_risk_write":
-                return PolicyDecision(
-                    effect="require_approval",
-                    reason_codes=["policy.high_risk_write"],
-                    obligations=[],
-                )
         return PolicyDecision(effect="allow", reason_codes=["policy.default_allow"], obligations=[])
 
 

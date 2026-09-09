@@ -1,0 +1,10 @@
+{
+  "data_dir": ".usagi/weixin",
+  "account_ref": "weixin-main",
+  "database_environment": "debug",
+  "server_url": "http://127.0.0.1:8080",
+  "api_token_env": "USAGI_ADAPTER_TOKEN",
+  "server_token_env": "USAGI_WEIXIN_TOKEN",
+  "host": "127.0.0.1",
+  "port": 8090
+}

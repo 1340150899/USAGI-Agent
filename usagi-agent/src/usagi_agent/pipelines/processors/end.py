@@ -96,7 +96,7 @@ class EndProcessor(StageProcessor):
 
     async def _default_end(self, input: EndRuleInput, context: RunContext) -> EndRuleOutput:
         iteration = input.iteration + 1
-        # A rule or an earlier stage (approval rejection, budget gate) already
+        # A rule or an earlier stage (for example, a budget gate) already
         # decided this pass failed; the router preserves that decision.
         if input.pass_disposition == "run_failed":
             return EndRuleOutput(pass_disposition="run_failed", iteration=iteration)

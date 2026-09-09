@@ -8,7 +8,6 @@ transaction boundary (§2.3) and the §10.6 contract. ``thread_id == run_id`` (�
 from __future__ import annotations
 
 import pickle
-import uuid
 from collections.abc import AsyncIterator, Iterator, Sequence
 from datetime import datetime, timezone
 from typing import Any, cast
@@ -16,6 +15,7 @@ from typing import Any, cast
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
     BaseCheckpointSaver,
+    WRITES_IDX_MAP,
     ChannelVersions,
     Checkpoint,
     CheckpointMetadata,
@@ -62,19 +62,54 @@ class SqliteFencedCheckpointer(BaseCheckpointSaver):
 
         return aiosqlite.connect(self._db_path)
 
+    async def abind_thread(
+        self,
+        *,
+        tenant_id: str,
+        thread_id: str,
+        control_id: str,
+        graph_checksum: str,
+    ) -> None:
+        async with self._connect() as conn:
+            await conn.execute(
+                "INSERT OR IGNORE INTO thread_control_bindings "
+                "(tenant_id, thread_id, control_kind, control_id, graph_checksum) "
+                "VALUES (?, ?, 'run', ?, ?)",
+                (tenant_id, thread_id, control_id, graph_checksum),
+            )
+            cur = await conn.execute(
+                "SELECT tenant_id, control_kind, control_id, graph_checksum "
+                "FROM thread_control_bindings WHERE thread_id = ?",
+                (thread_id,),
+            )
+            row = await cur.fetchone()
+            await cur.close()
+            if row != (tenant_id, "run", control_id, graph_checksum):
+                raise FencingGateError("thread is bound to different runtime control")
+            await conn.commit()
+
     @staticmethod
     def _verify_gate_sql() -> str:
         return (
-            "SELECT 1 FROM run_controls "
-            "WHERE tenant_id = :tenant_id AND run_id = :run_id "
-            "AND fencing_token = :fencing_token AND lease_owner = :lease_owner "
-            "AND lease_expires_at > datetime('now') "
-            "AND run_status IN ('running','resume_accepted')"
+            "SELECT 1 FROM thread_control_bindings AS binding "
+            "JOIN run_controls AS control "
+            "ON control.tenant_id = binding.tenant_id "
+            "AND control.run_id = binding.control_id "
+            "WHERE binding.tenant_id = :tenant_id "
+            "AND binding.thread_id = :thread_id "
+            "AND binding.control_kind = 'run' "
+            "AND binding.control_id = :run_id "
+            "AND control.fencing_token = :fencing_token "
+            "AND control.lease_owner = :lease_owner "
+            "AND control.lease_expires_at > datetime('now') "
+            "AND control.run_status IN ('running','resume_accepted')"
         )
 
-    async def _verify_gate(self, conn, gate: FencingGate) -> None:
+    async def _verify_gate(self, conn, gate: FencingGate, thread_id: str) -> None:
         cur = await conn.execute(self._verify_gate_sql(), {
             "tenant_id": gate.tenant_id, "run_id": gate.control_id,
+            # LangGraph appends ``|checkpoint_ns`` to the configured thread id.
+            "thread_id": thread_id.partition("|")[0],
             "fencing_token": gate.fencing_token, "lease_owner": gate.lease_owner,
         })
         row = await cur.fetchone()
@@ -90,16 +125,16 @@ class SqliteFencedCheckpointer(BaseCheckpointSaver):
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
         gate = _gate(config)
-        thread_id = _cfg(config, "thread_id", "")
+        thread_id = (_cfg(config, "thread_id", "") + "|" + _cfg(config, "checkpoint_ns", ""))
         tenant_id = _cfg(config, "tenant_id", "default")
-        new_id = "ckpt_" + uuid.uuid4().hex
+        new_id = checkpoint["id"]
         parent_id = _cfg(config, "checkpoint_id")
         async with self._connect() as conn:
-            await conn.execute("BEGIN")
+            await conn.execute("BEGIN IMMEDIATE")
             if gate is not None:
-                await self._verify_gate(conn, gate)
+                await self._verify_gate(conn, gate, thread_id)
             await conn.execute(
-                "INSERT INTO checkpoints (tenant_id, thread_id, checkpoint_id, parent_checkpoint_id, checkpoint, metadata, created_at) "
+                "INSERT OR REPLACE INTO checkpoints (tenant_id, thread_id, checkpoint_id, parent_checkpoint_id, checkpoint, metadata, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (tenant_id, thread_id, new_id, parent_id,
                  pickle.dumps(checkpoint), pickle.dumps(metadata),
@@ -116,24 +151,24 @@ class SqliteFencedCheckpointer(BaseCheckpointSaver):
         task_path: str = "",
     ) -> None:
         gate = _gate(config)
-        thread_id = _cfg(config, "thread_id", "")
+        thread_id = (_cfg(config, "thread_id", "") + "|" + _cfg(config, "checkpoint_ns", ""))
         tenant_id = _cfg(config, "tenant_id", "default")
         checkpoint_id = _cfg(config, "checkpoint_id", "")
         async with self._connect() as conn:
-            await conn.execute("BEGIN")
+            await conn.execute("BEGIN IMMEDIATE")
             if gate is not None:
-                await self._verify_gate(conn, gate)
+                await self._verify_gate(conn, gate, thread_id)
             for idx, (channel, value) in enumerate(writes):
                 await conn.execute(
-                    "INSERT INTO checkpoint_writes (tenant_id, thread_id, checkpoint_id, task_id, task_path, channel, value, idx) "
+                    ("INSERT OR REPLACE" if channel in WRITES_IDX_MAP else "INSERT OR IGNORE") + " INTO checkpoint_writes (tenant_id, thread_id, checkpoint_id, task_id, task_path, channel, value, idx) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (tenant_id, thread_id, checkpoint_id, task_id, task_path,
-                     channel, pickle.dumps(value), idx),
+                     channel, pickle.dumps(value), WRITES_IDX_MAP.get(channel, idx)),
                 )
             await conn.commit()
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
-        thread_id = _cfg(config, "thread_id", "")
+        thread_id = (_cfg(config, "thread_id", "") + "|" + _cfg(config, "checkpoint_ns", ""))
         tenant_id = _cfg(config, "tenant_id", "default")
         checkpoint_id = _cfg(config, "checkpoint_id")
         async with self._connect() as conn:
@@ -180,7 +215,7 @@ class SqliteFencedCheckpointer(BaseCheckpointSaver):
         limit: int | None = None,
     ) -> AsyncIterator[CheckpointTuple]:
         config = config or cast(RunnableConfig, {})
-        thread_id = _cfg(config, "thread_id", "")
+        thread_id = (_cfg(config, "thread_id", "") + "|" + _cfg(config, "checkpoint_ns", ""))
         tenant_id = _cfg(config, "tenant_id", "default")
         async with self._connect() as conn:
             cur = await conn.execute(
@@ -202,8 +237,9 @@ class SqliteFencedCheckpointer(BaseCheckpointSaver):
 
     async def adelete_thread(self, thread_id: str) -> None:
         async with self._connect() as conn:
-            await conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
-            await conn.execute("DELETE FROM checkpoint_writes WHERE thread_id = ?", (thread_id,))
+            prefix = thread_id + "|"
+            await conn.execute("DELETE FROM checkpoints WHERE thread_id = ? OR substr(thread_id,1,?) = ?", (thread_id,len(prefix),prefix))
+            await conn.execute("DELETE FROM checkpoint_writes WHERE thread_id = ? OR substr(thread_id,1,?) = ?", (thread_id,len(prefix),prefix))
             await conn.commit()
 
     # Sync API: delegate via a throwaway loop is unsafe in async context; raise clearly.

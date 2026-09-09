@@ -78,6 +78,12 @@ async def test_sqlite_durable_round_trip_and_bad_gate():
     rc = SqliteRunControlStore(db)
     cp = SqliteFencedCheckpointer(db)
     await rc.create(_state("r1", 5))
+    await cp.abind_thread(
+        tenant_id="default",
+        thread_id="r1",
+        control_id="r1",
+        graph_checksum="test-graph",
+    )
     cfg: RunnableConfig = {
         "configurable": {
             "thread_id": "r1",

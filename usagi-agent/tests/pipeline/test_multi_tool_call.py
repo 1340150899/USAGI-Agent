@@ -27,7 +27,7 @@ class _CountingTool(ToolAdapter):
 
     @property
     def spec(self) -> ToolSpec:  # noqa: A003 - ToolAdapter contract
-        return ToolSpec(
+        return ToolSpec(requires_approval=False,
             name=self._name,
             description=f"echo tool {self._name}",
             parameters={
@@ -152,7 +152,7 @@ def _build_server(model, tools, tmp_path):
     runtime = ServiceRuntimeInitializer.init(
         BootstrapSettings(
             model_execution_mode="scripted",
-            memory_path=str(tmp_path / "memory.json"),
+            sqlite_path=str(tmp_path / "runtime.db"),
         )
     )
     runtime.agent_manager.set_model_adapter(model)
@@ -175,8 +175,8 @@ def _build_server(model, tools, tmp_path):
 async def test_parallel_tool_calls_execute_serially_and_all_feed_back(tmp_path):
     alpha, beta = _CountingTool("alpha"), _CountingTool("beta")
     model = _MultiCallModel()
-    server, runtime = _build_server(model, (alpha, beta), tmp_path)
-    handle = await server.start_agent(
+    server, _runtime = _build_server(model, (alpha, beta), tmp_path)
+    handle = await server.create_session(
         RunStartRequest(
             scenario_key="example.research_writer",
             request_idempotency_key="multi-tool-pass",
@@ -196,8 +196,8 @@ async def test_parallel_tool_calls_execute_serially_and_all_feed_back(tmp_path):
 async def test_parse_error_is_fed_back_and_model_recovers(tmp_path):
     alpha = _CountingTool("alpha")
     model = _ParseErrorThenFixModel()
-    server, runtime = _build_server(model, (alpha,), tmp_path)
-    handle = await server.start_agent(
+    server, _runtime = _build_server(model, (alpha,), tmp_path)
+    handle = await server.create_session(
         RunStartRequest(
             scenario_key="example.research_writer",
             request_idempotency_key="parse-error-recovery",

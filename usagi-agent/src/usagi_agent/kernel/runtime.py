@@ -18,10 +18,11 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import uuid
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncIterator
+from typing import Any
 
 from langgraph.types import Command
 from pydantic import SecretStr
@@ -46,7 +47,6 @@ from usagi_agent.types.refs import (
     ArtifactOwner,
     ArtifactRef,
     PrincipalRef,
-    ThreadControlBinding,
 )
 from usagi_agent.types.run import (
     CancellationReasonCode,
@@ -57,15 +57,15 @@ from usagi_agent.types.run import (
     ResumeTokenEnvelope,
     RunHandle,
     Running,
-    RunOptions,
     RunOutcome,
     RunStartRequest,
-    RunStatus,
     Suspended,
 )
 from usagi_agent.types.settlement import FencingGate
+from usagi_agent.sessions.types import SessionMessage
 
 _LEASE_TTL_SECONDS = 60
+log = logging.getLogger(__name__)
 _DEV_HMAC_KEY = b"usagi-dev-fingerprint-key"  # TODO(§24.5): tenant-scoped HMAC key service
 
 
@@ -82,12 +82,18 @@ def _canonical(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
-def _client_fingerprint(tenant_id: str, namespace: str, request: RunStartRequest) -> str:
+def _client_fingerprint(
+    tenant_id: str,
+    namespace: str,
+    session_id: str,
+    request: RunStartRequest,
+) -> str:
     payload = _canonical(
         {
             "tenant": tenant_id,
             "namespace": namespace,
             "scenario": request.scenario_key,
+            "session_id": session_id,
             "input": request.input.model_dump(mode="json"),
             "content_parts": [
                 part.model_dump(mode="json") for part in request.content_parts
@@ -211,8 +217,8 @@ class RunControlManager:
         return final  # type: ignore[return-value]
 
 
-class KernelRuntime:
-    """Execution root resolving already-compiled scenarios from ServerRuntime."""
+class _KernelRuntime:
+    """Private execution engine resolving precompiled scenarios."""
 
     def __init__(self, runtime) -> None:
         self._runtime = runtime
@@ -228,11 +234,88 @@ class KernelRuntime:
 
     # --- public lifecycle API (§10.5) ---
 
-    async def start_agent(self, request: RunStartRequest, *, auth=None) -> RunHandle:
-        return await self._start(request, kind="agent", auth=auth)
+    async def create_session(self, request: RunStartRequest, *, auth=None) -> SessionMessage:
+        auth_context = self._resolve_auth(auth)
+        uid = auth_context.principal.principal_opaque_id
+        session_id = self._new_session_id(auth_context, request.request_idempotency_key)
+        session = await self._runtime.session_manager.create(uid, session_id)
+        handle = await self._start(
+            request, auth=auth_context, session_id=session.id
+        )
+        return await self._session_message(session.id, handle)
 
-    async def start_workflow(self, request: RunStartRequest, *, auth=None) -> RunHandle:
-        return await self._start(request, kind="workflow", auth=auth)
+    async def continue_session(
+        self, session_id: str, request: RunStartRequest, *, auth=None
+    ) -> SessionMessage:
+        auth_context = self._resolve_auth(auth)
+        session = await self._runtime.session_manager.get(session_id)
+        if session is None:
+            raise UsagiError(f"session {session_id} not found")
+        if session.uid != auth_context.principal.principal_opaque_id:
+            raise PolicyDeniedError("caller does not own this session")
+        if session.status == "closed":
+            raise UsagiError(f"session {session_id} is closed")
+
+        pending = await self._ports.approval_store.list_pending_by_session(session_id)
+        if session.status == "pending_approval" or pending:
+            if len(pending) != 1:
+                raise UsagiError(f"session {session_id} does not have one pending approval")
+            task = pending[0]
+            state = await self._ports.run_control_store.get(task.run_id)
+            # Repair the exact inconsistent state produced by the former resume
+            # bug: it persisted ``completed`` with an empty result while the
+            # graph and approval store still had a live interrupt. This keeps
+            # already-persisted conversations usable after upgrading.
+            if (
+                state is not None
+                and state.run_status == "completed"
+                and (
+                    state.final_result_ref is None
+                    or not state.final_result_ref.artifact_id
+                )
+                and state.suspended_checkpoint_id
+            ):
+                await self._rcm.to_suspended(
+                    task.run_id,
+                    state.suspended_checkpoint_id,
+                    task.interrupt_id,
+                )
+            answer = str(getattr(request.input, "query", "")).strip().lower()
+            handle = await self._build_handle(task.run_id)
+            if answer not in {"yes", "no"}:
+                return await self._session_message(session_id, handle, approval=task)
+            current = handle.outcome
+            if not isinstance(current, Suspended):
+                raise UsagiError(f"run {task.run_id} is not suspended")
+            descriptor = next(
+                (item for item in current.interrupts if item.interrupt_id == task.interrupt_id),
+                None,
+            )
+            if descriptor is None:
+                raise UsagiError("pending approval interrupt is unavailable")
+            token = await self.issue_resume_token(
+                task.run_id, task.interrupt_id, descriptor.checkpoint_id, auth=auth_context
+            )
+            resumed = await self.resume(
+                task.run_id,
+                ApprovalResume(
+                    interrupt_id=task.interrupt_id,
+                    expected_checkpoint_id=descriptor.checkpoint_id,
+                    resume_token=token.resume_token,
+                    approval_id=task.approval_id,
+                    expected_approval_version=task.version,
+                    approval_scope=task.approval_scope,
+                    action_hash=task.action_hash,
+                    decision="approve" if answer == "yes" else "reject",
+                ),
+                auth=auth_context,
+            )
+            return await self._session_message(session_id, resumed)
+
+        handle = await self._start(
+            request, auth=auth_context, session_id=session_id
+        )
+        return await self._session_message(session_id, handle)
 
     async def get_run(self, run_id: str, *, auth=None) -> RunOutcome:
         await self._authorize_run(run_id, auth, "run.read")
@@ -287,7 +370,7 @@ class KernelRuntime:
         )
         config: dict[str, Any] = {
             "configurable": {
-                "thread_id": run_id,
+                "thread_id": snapshot.thread_id,
                 "tenant_id": self._tenant,
                 "checkpoint_id": checkpoint_id,
                 "checkpoint_ns": "",
@@ -300,16 +383,26 @@ class KernelRuntime:
                     authorization_scope=snapshot.authorization_scope,
                     deadline=snapshot.absolute_deadline,
                     fencing_token=state.fencing_token,
+                    session_id=approval.session_id,
                 ),
             }
         }
+        heartbeat = asyncio.create_task(
+            self._keep_lease_alive(run_id, state.lease_owner or "", state.fencing_token)
+        )
         try:
             result = await scenario.compiled_graph.ainvoke(
                 Command(resume=resume.model_dump(mode="python")), config
             )
             await self._finish_graph_result(run_id, scenario, config, result, snapshot)
         except Exception as exc:
+            log.exception("run %s failed while resuming the pipeline", run_id)
             await self._rcm.to_failed(run_id, [type(exc).__name__])
+        finally:
+            heartbeat.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat
+
         return await self._build_handle(run_id)
 
     async def issue_resume_token(self, run_id: str, interrupt_id: str, expected_checkpoint_id: str, *, auth=None):
@@ -332,24 +425,14 @@ class KernelRuntime:
             ),
         )
 
-    async def reissue_resume_token(self, run_id: str, interrupt_id: str, expected_checkpoint_id: str, *, auth=None):
-        return await self.issue_resume_token(
-            run_id, interrupt_id, expected_checkpoint_id, auth=auth
-        )
-
-    def stream(self, run_id: str, *, auth=None) -> AsyncIterator:
-        async def _empty() -> AsyncIterator:
-            await self._authorize_run(run_id, auth, "run.read")
-            return
-            yield  # pragma: no cover
-        return _empty()
-
     # --- ingress + drive ---
 
-    async def _start(self, request: RunStartRequest, *, kind: str, auth=None) -> RunHandle:
+    async def _start(
+        self, request: RunStartRequest, *, auth=None, session_id: str,
+    ) -> RunHandle:
         auth_context = self._resolve_auth(auth)
         namespace = f"{self._tenant}:{auth_context.principal.principal_opaque_id}"
-        client_fp = _client_fingerprint(self._tenant, namespace, request)
+        client_fp = _client_fingerprint(self._tenant, namespace, session_id, request)
 
         # Dedup BEFORE resolving the Bundle (§10.5): same key + same fingerprint -> replay.
         existing = await self._ports.run_start_request_store.get_by_key(
@@ -361,13 +444,16 @@ class KernelRuntime:
                     f"idempotency conflict for key {request.request_idempotency_key!r}",
                     reason_code="run.idempotency_conflict",
                 )
-            return await self._build_handle(existing.run_id)
+            return await self._await_existing_handle(existing.run_id)
 
         # First request: resolve immutable Bundle by scenario_key.
         scenario = self._runtime.scenario_registry.get(request.scenario_key)
         bundle_fp = f"{self._runtime.settings.service_version}:{scenario.checksum}"
 
         run_id = _new_id("run")
+        # A graph checkpoint thread is scoped to one Run. Conversational memory
+        # is scoped independently to the Session so completed Pipeline control
+        # fields never leak into the next user turn.
         thread_id = run_id
 
         # Persist input as a quarantined Artifact (§10.5).
@@ -395,7 +481,11 @@ class KernelRuntime:
             client_request_fingerprint=client_fp, execution_bundle_fingerprint=bundle_fp,
             run_id=run_id, input_metadata_ref=input_ref, status="pending", created_at=_now(),
         )
-        await self._ports.run_start_request_store.insert(record)
+        stored_record = await self._ports.run_start_request_store.insert(record)
+        # Another process may win the idempotency-key race after the initial
+        # lookup. Only the winner may create control state or drive the graph.
+        if stored_record.run_id != run_id:
+            return await self._await_existing_handle(stored_record.run_id)
 
         snapshot = ExecutionContextSnapshot(
             run_id=run_id, thread_id=thread_id, scenario_key=request.scenario_key,
@@ -415,6 +505,15 @@ class KernelRuntime:
         )
         await self._ports.run_control_store.create(state)
 
+        bind_thread = getattr(self._ports.checkpointer, "abind_thread", None)
+        if bind_thread is not None:
+            await bind_thread(
+                tenant_id=self._tenant,
+                thread_id=thread_id,
+                control_id=run_id,
+                graph_checksum=scenario.checksum,
+            )
+
         await self._ports.outbox_store.enqueue(DurableOutboxEvent(
             event_id=_new_id("evt"), tenant_id=self._tenant, aggregate_type="run",
             aggregate_id=run_id, aggregate_version=0, event_type="run.start_requested",
@@ -423,13 +522,17 @@ class KernelRuntime:
 
         # Drive the compiled graph (dev: inline worker; production: separate Worker).
         with span(self._obs, "workflow.run", scenario=request.scenario_key):
-            await self._drive(run_id, scenario, input_ref, request, auth_context)
+            await self._drive(
+                run_id, scenario, input_ref, request, auth_context,
+                thread_id, session_id,
+            )
 
         return await self._build_handle(run_id)
 
     async def _drive(
         self, run_id: str, scenario, input_ref: ArtifactRef,
-        request: RunStartRequest, auth_context: AuthContext,
+        request: RunStartRequest, auth_context: AuthContext, thread_id: str,
+        session_id: str,
     ) -> None:
         state = await self._ports.run_control_store.get(run_id)
         if state is None:
@@ -440,18 +543,19 @@ class KernelRuntime:
         )
         config: dict[str, Any] = {
             "configurable": {
-                "thread_id": run_id,
+                "thread_id": thread_id,
                 "tenant_id": self._tenant,
                 "fencing_gate": gate,
                 "checkpoint_ns": "",
                 "run_context": RunContext(
                     run_id=run_id,
-                    thread_id=run_id,
+                    thread_id=thread_id,
                     tenant_id=self._tenant,
                     principal=auth_context.principal,
                     authorization_scope=auth_context.authorization_scope,
                     deadline=request.options.absolute_deadline,
                     fencing_token=state.fencing_token,
+                    session_id=session_id,
                 ),
             }
         }
@@ -468,6 +572,7 @@ class KernelRuntime:
         try:
             result = await scenario.compiled_graph.ainvoke(input_state, config)
         except Exception as exc:
+            log.exception("run %s failed while invoking the pipeline", run_id)
             reason = [type(exc).__name__]
             await self._rcm.to_failed(run_id, reason)
             return
@@ -478,7 +583,7 @@ class KernelRuntime:
 
         snapshot = await self._ports.execution_context_store.get(run_id)
         assert snapshot is not None
-        await self._finish_graph_result(run_id, scenario, config, result, snapshot, input_ref)
+        await self._finish_graph_result(run_id, scenario, config, result, snapshot)
 
     async def _keep_lease_alive(
         self, run_id: str, owner: str, fencing_token: int
@@ -500,7 +605,7 @@ class KernelRuntime:
 
     async def _finish_graph_result(
         self, run_id: str, scenario, config: dict[str, Any], result: Any,
-        snapshot: ExecutionContextSnapshot, input_ref: ArtifactRef | None = None,
+        snapshot: ExecutionContextSnapshot,
     ) -> None:
         state_config = config
         configurable = dict(config.get("configurable", {}))
@@ -508,29 +613,39 @@ class KernelRuntime:
             configurable.pop("checkpoint_id")
             state_config = {**config, "configurable": configurable}
         gstate = await scenario.compiled_graph.aget_state(state_config)
-        if gstate.next:
+        interrupts = self._collect_interrupts(gstate)
+        pending = await self._ports.approval_store.list_pending(run_id)
+        # A resumed node can interrupt again before producing a new checkpoint
+        # (for example, a second tool in the same model response). Pending
+        # approval state is therefore authoritative even when ``next`` is empty.
+        if gstate.next or interrupts or pending:
             checkpoint_id = (gstate.config.get("configurable") or {}).get("checkpoint_id", "")
             interrupt_id = "interrupt"
-            interrupts = self._collect_interrupts(gstate)
             if interrupts:
                 value = interrupts[0].value
                 interrupt_id = (
                     str(value.get("approval_id", interrupts[0].id))
                     if isinstance(value, dict) else interrupts[0].id
                 )
-            else:
-                pending = await self._ports.approval_store.list_pending(run_id)
-                if len(pending) == 1:
-                    interrupt_id = pending[0].interrupt_id
+            elif len(pending) == 1:
+                interrupt_id = pending[0].interrupt_id
             await self._rcm.to_suspended(run_id, checkpoint_id, interrupt_id)
             return
-        if isinstance(result, dict) and result.get("pass_disposition") in {
+
+        state_values = getattr(gstate, "values", None)
+        terminal = state_values if isinstance(state_values, dict) else result
+        if isinstance(terminal, dict) and terminal.get("pass_disposition") in {
             "run_failed", "next_pass"
         }:
             await self._rcm.to_failed(run_id, ["pipeline.run_failed"])
             return
-        fallback = input_ref or ArtifactRef(artifact_id="", content_type="application/octet-stream")
-        await self._rcm.to_completed(run_id, self._extract_final_ref(result, fallback))
+        final_ref = self._extract_final_ref(terminal)
+        if final_ref is None and terminal is not result:
+            final_ref = self._extract_final_ref(result)
+        if final_ref is None:
+            await self._rcm.to_failed(run_id, ["pipeline.missing_final_output"])
+            return
+        await self._rcm.to_completed(run_id, final_ref)
 
     @classmethod
     def _collect_interrupts(cls, snapshot) -> list:
@@ -543,15 +658,15 @@ class KernelRuntime:
         return interrupts
 
     @staticmethod
-    def _extract_final_ref(result: Any, input_ref: ArtifactRef) -> ArtifactRef:
+    def _extract_final_ref(result: Any) -> ArtifactRef | None:
         if isinstance(result, dict):
             for key in ("final_output_ref", "result_ref"):
                 val = result.get(key)
-                if isinstance(val, str):
+                if isinstance(val, str) and val:
                     return ArtifactRef(artifact_id=val, content_type="application/octet-stream")
-                if isinstance(val, ArtifactRef):
+                if isinstance(val, ArtifactRef) and val.artifact_id:
                     return val
-        return input_ref
+        return None
 
     async def _build_handle(self, run_id: str) -> RunHandle:
         state = await self._ports.run_control_store.get(run_id)
@@ -568,6 +683,51 @@ class KernelRuntime:
             outcome=outcome, created_at=_now(),
         )
 
+    async def _await_existing_handle(self, run_id: str) -> RunHandle:
+        """Wait briefly for the winning starter to publish its durable state."""
+        for _ in range(500):
+            try:
+                return await self._build_handle(run_id)
+            except UsagiError:
+                await asyncio.sleep(0.01)
+        raise UsagiError(f"idempotent run {run_id} was not initialized")
+
+    async def _session_message(
+        self, session_id: str, handle: RunHandle, *, approval=None
+    ) -> SessionMessage:
+        outcome = handle.outcome
+        if isinstance(outcome, Suspended):
+            if approval is None:
+                tasks = await self._ports.approval_store.list_pending(handle.run_id)
+                approval = tasks[0] if len(tasks) == 1 else None
+            tool = approval.tool_name if approval is not None else "unknown"
+            message = (
+                f"₍ᐢ..ᐢ₎ USAGI想使用{tool}工具，您同意吗(☆▽☆)，"
+                "请回复“Yes”或“No”！"
+            )
+            status = "pending_approval"
+        elif isinstance(outcome, Completed):
+            stream = await self._ports.artifact_manager.get(
+                outcome.result_ref, "run_execution"
+            )
+            message = b"".join([part async for part in stream]).decode(
+                "utf-8", errors="replace"
+            )
+            status = "idle"
+        elif isinstance(outcome, Failed):
+            message = "会话处理失败：" + ", ".join(outcome.reason_codes)
+            status = "idle"
+        else:
+            message = f"会话状态：{outcome.kind}"
+            status = "idle"
+        await self._runtime.session_manager.set_status(session_id, status)
+        return SessionMessage(
+            session_id=session_id,
+            message=message,
+            run_id=handle.run_id,
+            outcome=outcome,
+        )
+
     def _resolve_auth(self, auth: AuthContext | None) -> AuthContext:
         if auth is None:
             return AuthContext(
@@ -577,6 +737,14 @@ class KernelRuntime:
         if not isinstance(auth, AuthContext):
             raise TypeError("auth must be an AuthContext")
         return auth
+
+    def _new_session_id(self, auth: AuthContext, idempotency_key: str) -> str:
+        identity = [
+            self._tenant,
+            auth.principal.model_dump(mode="json"),
+            idempotency_key,
+        ]
+        return "session_" + hashlib.sha256(_canonical(identity).encode()).hexdigest()
 
     async def _authorize_run(
         self, run_id: str, auth: AuthContext | None, permission: str
@@ -592,10 +760,11 @@ class KernelRuntime:
         if permission not in context.authorization_scope and "run.admin" not in context.authorization_scope:
             raise PolicyDeniedError(f"missing authorization scope: {permission}")
 
-    @staticmethod
-    def _make_resume_token(run_id: str, interrupt_id: str, checkpoint_id: str) -> str:
+    def _make_resume_token(self, run_id: str, interrupt_id: str, checkpoint_id: str) -> str:
         payload = f"{run_id}:{interrupt_id}:{checkpoint_id}".encode()
-        return hmac.new(_DEV_HMAC_KEY, payload, hashlib.sha256).hexdigest()
+        configured = self._runtime.settings.resume_hmac_key
+        key = configured.get_secret_value().encode() if configured else _DEV_HMAC_KEY
+        return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
     def _project(self, run_id: str, state: RunControlState) -> RunOutcome:
         status = state.run_status
@@ -624,7 +793,13 @@ class KernelRuntime:
                 in_flight_operations=0, unresolved_operations=0,
             )
         if status == "completed":
-            ref = state.final_result_ref or ArtifactRef(artifact_id="", content_type="application/octet-stream")
+            ref = state.final_result_ref
+            if ref is None or not ref.artifact_id:
+                return Failed(
+                    run_id=run_id,
+                    failed_at=_now(),
+                    reason_codes=["pipeline.missing_final_output"],
+                )
             return Completed(run_id=run_id, completed_at=state.cancelled_at or _now(), result_ref=ref)
         if status == "failed":
             return Failed(run_id=run_id, failed_at=_now(), reason_codes=["run.failed"])

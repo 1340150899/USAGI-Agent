@@ -247,7 +247,7 @@ class ResultProcessProcessor(StageProcessor):
             ]
         event_operation_id = f"memory:assistant-event:{context.run_id}:{iteration}"
         event = await self.runtime.memory_manager.append_event(
-            session_id=context.thread_id,
+            session_id=context.memory_session_id,
             role="assistant",
             content_parts=merge_content_parts(text=response.content),
             ctx=context.to_tool_context(),
@@ -267,7 +267,7 @@ class ResultProcessProcessor(StageProcessor):
         if context_update is not None:
             update_operation_id = f"memory:context-update:{context.run_id}:{iteration}"
             await self.runtime.memory_manager.apply_context_update(
-                context.thread_id,
+                context.memory_session_id,
                 context.to_tool_context(),
                 operation_id=update_operation_id,
                 **context_update.model_dump(

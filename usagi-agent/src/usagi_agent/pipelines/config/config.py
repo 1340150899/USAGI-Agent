@@ -28,7 +28,7 @@ class AgentPipelineConfig(BaseModel):
     )
     result_process: tuple[ResultProcessAdapterConfig, ...] = ()
     end: tuple[EndAdapterConfig, ...] = ()
-    max_passes: int = Field(default=5, ge=1)
+    max_passes: int = Field(default=100, ge=1)
     max_tool_calls: int = Field(default=10, ge=1)
     max_delegations: int = Field(default=0, ge=0)
     budget: Budget = Field(default_factory=Budget)

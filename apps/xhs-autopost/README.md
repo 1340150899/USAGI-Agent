@@ -41,8 +41,10 @@ python apps/xhs-autopost/run.py "搜索关于杭州周末徒步的笔记并总�
 
 By default, only authentication status, feed discovery, search, note detail,
 and the current user's note list are exposed. To expose login/logout, comments,
-delete, and publish tools, add `--allow-writes`. This authorizes writes in the
-test application without interactive approval. Writes are never automatically
+delete, and publish tools, add `--allow-writes`. This only exposes the tools;
+approval remains controlled by `apps/httpserver/usagi_httpserver/tool_specs.py`
+and defaults to required. The one-shot CLI reports suspension; use the HTTP
+application for approval and resume. Writes are never automatically
 retried when their result is uncertain:
 
 ```powershell

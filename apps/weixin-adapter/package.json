@@ -1,0 +1,12 @@
+{
+  "name": "usagi-weixin-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=24"},
+  "scripts": {"build": "node build.mjs", "start": "node dist/main.js", "login": "node dist/main.js login", "bind": "node dist/main.js login", "test": "node build.mjs && node --test test/*.test.mjs"},
+  "dependencies": {"qrcode-terminal": "0.12.0", "silk-wasm": "3.7.1"},
+  "devDependencies": {"esbuild": "0.25.12"},
+  "ilink_appid": "bot",
+  "weixin_protocol_version": "2.4.8"
+}

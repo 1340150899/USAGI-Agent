@@ -6,12 +6,21 @@ from usagi_agent.tools.builtin.current_time import CurrentTimeTool
 
 
 def builtin_tools(
-    artifact_manager: ArtifactManager, metadata_store: ArtifactMetadataStore
+    artifact_manager: ArtifactManager, metadata_store: ArtifactMetadataStore,
+    *, specs=None,
 ) -> tuple[ToolAdapter, ...]:
+    from usagi_agent.tools.spec import BUILTIN_TOOL_SPECS
+    selected = BUILTIN_TOOL_SPECS if specs is None else specs
+    unknown = set(selected) - set(BUILTIN_TOOL_SPECS)
+    if unknown:
+        raise ValueError(f"unknown builtin tools: {sorted(unknown)}")
+    factories = {
+        "current_time": lambda spec: CurrentTimeTool(spec=spec),
+        "calculator": lambda spec: CalculatorTool(spec=spec),
+        "artifact_reader": lambda spec: ArtifactReaderTool(artifact_manager, metadata_store, spec=spec),
+    }
     return (
-        CurrentTimeTool(),
-        CalculatorTool(),
-        ArtifactReaderTool(artifact_manager, metadata_store),
+        *[factories[name](spec) for name, spec in selected.items()],
     )
 
 

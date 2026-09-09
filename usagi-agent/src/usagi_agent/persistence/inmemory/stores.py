@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import secrets as _secrets
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -18,12 +17,49 @@ from usagi_agent.persistence.ports.execution import (
 )
 from usagi_agent.persistence.ports.outbox import DurableOutboxEvent, InboxReceipt
 from usagi_agent.persistence.ports.memory import MemoryHit, MemoryRecord
+from usagi_agent.persistence.ports.session import SessionRecord, SessionStatus
 from usagi_agent.types.refs import SecretRef
 from usagi_agent.types.settlement import AdoptionStatus, ExecutionStatus
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class InMemorySessionStore:
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._by_id: dict[str, SessionRecord] = {}
+
+    async def create(self, uid: str, session_id: str) -> SessionRecord:
+        async with self._lock:
+            existing = self._by_id.get(session_id)
+            if existing is not None:
+                if existing.uid != uid:
+                    raise CASMismatch(f"session {session_id!r} belongs to another user")
+                return existing
+            now = _now()
+            record = SessionRecord(id=session_id, uid=uid, uptime=now, crtime=now)
+            self._by_id[session_id] = record
+            return record
+
+    async def get(self, session_id: str) -> SessionRecord | None:
+        async with self._lock:
+            return self._by_id.get(session_id)
+
+    async def get_for_uid(self, uid: str) -> SessionRecord | None:
+        async with self._lock:
+            matches = [item for item in self._by_id.values() if item.uid == uid and item.status != "closed"]
+            return max(matches, key=lambda item: item.crtime) if matches else None
+
+    async def set_status(self, session_id: str, status: SessionStatus) -> SessionRecord:
+        async with self._lock:
+            record = self._by_id.get(session_id)
+            if record is None:
+                raise KeyError(f"session {session_id!r} not found")
+            record = record.model_copy(update={"status": status, "uptime": _now()})
+            self._by_id[session_id] = record
+            return record
 
 
 class InMemoryApprovalStore:
@@ -51,13 +87,20 @@ class InMemoryApprovalStore:
                 if task.run_id == run_id and task.status == "pending"
             )
 
+    async def list_pending_by_session(self, session_id: str) -> tuple[ApprovalTask, ...]:
+        async with self._lock:
+            return tuple(
+                task for task in self._by_id.values()
+                if task.session_id == session_id and task.status == "pending"
+            )
+
     async def cas_decide(
         self, approval_id: str, *, expected_version: int,
         decision: Literal["approve", "reject"], evidence_ref,
     ) -> ApprovalTask:
         async with self._lock:
             t = self._by_id.get(approval_id)
-            if t is None or t.version != expected_version:
+            if t is None or t.version != expected_version or t.status != "pending":
                 raise CASMismatch(f"approval decide cas failed {approval_id}")
             bumped = t.model_copy(
                 update={
@@ -79,6 +122,9 @@ class InMemoryToolExecutionStore:
 
     async def reserve(self, record: ToolExecutionRecord) -> ToolExecutionRecord:
         async with self._lock:
+            existing=self._by_id.get(record.execution_id)
+            if existing is not None and record.observation_ref is None:
+                return existing
             self._by_id[record.execution_id] = record
             return record
 

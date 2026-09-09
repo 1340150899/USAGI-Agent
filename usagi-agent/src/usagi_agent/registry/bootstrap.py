@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 
 class BootstrapSettings(BaseModel):
@@ -19,17 +19,16 @@ class BootstrapSettings(BaseModel):
 
     # --- Identity / tenancy (§2.3: single tenant, fixed non-null value) ---
     tenant_id: str = Field(default="default", description="Single-tenant id; never NULL.")
+    resume_hmac_key: SecretStr | None = None
 
     # --- Persistence backend selection (§24.1: dev=InMemory, durable=SQLite) ---
-    persistence_backend: Literal["inmemory", "sqlite"] = "inmemory"
     sqlite_path: str | None = Field(
         default=None, description="Path to a single shared SQLite DB (all Stores co-located)."
     )
+    sqlite_dev_path: str | None = None
+    sqlite_debug_path: str | None = None
+    database_environment: Literal["dev", "debug"] = "dev"
     artifact_dir: str | None = Field(default=None, description="Encrypted artifact blob root.")
-    memory_path: str = Field(
-        default=".usagi/memory.json",
-        description="Local LangGraph BaseStore JSON path; replace with a DB store later.",
-    )
 
     # --- Model execution: live is the production path; scripted is deterministic. ---
     model_execution_mode: Literal["live", "scripted"] = "live"
@@ -54,5 +53,16 @@ class BootstrapSettings(BaseModel):
 
     def require_durable(self) -> None:
         """Validate SQLite-specific constraints when the durable backend is selected."""
-        if self.persistence_backend == "sqlite" and not self.sqlite_path:
-            raise ValueError("sqlite_path is required when persistence_backend='sqlite'")
+        if not self.selected_sqlite_path():
+            raise ValueError("configure sqlite_path or both environment database paths")
+
+    def selected_sqlite_path(self) -> str | None:
+        if self.sqlite_dev_path and self.sqlite_debug_path:
+            return self.sqlite_debug_path if self.database_environment == "debug" else self.sqlite_dev_path
+        return self.sqlite_path
+
+    def all_sqlite_paths(self) -> tuple[str, ...]:
+        paths = [path for path in (self.sqlite_dev_path, self.sqlite_debug_path) if path]
+        if not paths and self.sqlite_path:
+            paths.append(self.sqlite_path)
+        return tuple(dict.fromkeys(paths))

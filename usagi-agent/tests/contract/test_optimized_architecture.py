@@ -58,9 +58,9 @@ def test_tool_spec_is_the_minimal_function_contract():
     assert ToolSpec(name="t", description="d").risk == "read"
 
 
-def test_service_init_registers_only_builtins_and_does_not_compile_scenarios():
+def test_service_init_registers_only_builtins_and_does_not_compile_scenarios(tmp_path):
     runtime = ServiceRuntimeInitializer.init(
-        BootstrapSettings(model_execution_mode="scripted")
+        BootstrapSettings(model_execution_mode="scripted", sqlite_path=str(tmp_path / "runtime.db"))
     )
     assert set(spec.name for spec in runtime.tool_manager.all_specs()) == {
         "current_time", "calculator", "artifact_reader"
@@ -71,9 +71,9 @@ def test_service_init_registers_only_builtins_and_does_not_compile_scenarios():
     asyncio.run(runtime.shutdown())
 
 
-def test_pipeline_init_reuses_service_instances_and_scenario_has_no_tools():
+def test_pipeline_init_reuses_service_instances_and_scenario_has_no_tools(tmp_path):
     runtime = ServiceRuntimeInitializer.init(
-        BootstrapSettings(model_execution_mode="scripted")
+        BootstrapSettings(model_execution_mode="scripted", sqlite_path=str(tmp_path / "runtime.db"))
     )
     persistence = runtime.persistence
     runtime.tool_manager.register(SearchToolAdapter())
@@ -111,9 +111,9 @@ def test_scenario_uses_only_framework_owned_stage_rules():
         assert all(type(rule).__module__.startswith("usagi_agent.pipelines.rules") for rule in stage)
 
 
-def test_prompt_is_resolved_from_static_catalog_not_agent_or_manager_state():
+def test_prompt_is_resolved_from_static_catalog_not_agent_or_manager_state(tmp_path):
     runtime = ServiceRuntimeInitializer.init(
-        BootstrapSettings(model_execution_mode="scripted")
+        BootstrapSettings(model_execution_mode="scripted", sqlite_path=str(tmp_path / "runtime.db"))
     )
     registered = create_research_writer_agent(runtime.agent_manager)
     assert "prompt" not in type(registered).model_fields
@@ -122,9 +122,9 @@ def test_prompt_is_resolved_from_static_catalog_not_agent_or_manager_state():
     asyncio.run(runtime.shutdown())
 
 
-def test_health_reports_every_persistence_resource_and_isolates_failures():
+def test_health_reports_every_persistence_resource_and_isolates_failures(tmp_path):
     runtime = ServiceRuntimeInitializer.init(
-        BootstrapSettings(model_execution_mode="scripted")
+        BootstrapSettings(model_execution_mode="scripted", sqlite_path=str(tmp_path / "runtime.db"))
     )
     runtime.tool_manager.register(_FailingLifecycleTool())
     runtime.persistence.event_bus = _HealthFailureProbe()
@@ -142,9 +142,9 @@ def test_health_reports_every_persistence_resource_and_isolates_failures():
         asyncio.run(runtime.shutdown())
 
 
-def test_shutdown_continues_after_an_earlier_resource_fails():
+def test_shutdown_continues_after_an_earlier_resource_fails(tmp_path):
     runtime = ServiceRuntimeInitializer.init(
-        BootstrapSettings(model_execution_mode="scripted")
+        BootstrapSettings(model_execution_mode="scripted", sqlite_path=str(tmp_path / "runtime.db"))
     )
     runtime.tool_manager.register(_FailingLifecycleTool())
     probe = _CloseProbe()

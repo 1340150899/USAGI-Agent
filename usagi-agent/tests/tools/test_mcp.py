@@ -82,7 +82,7 @@ async def _wait_for_port(port: int) -> None:
     deadline = asyncio.get_running_loop().time() + 10
     while asyncio.get_running_loop().time() < deadline:
         try:
-            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            _reader, writer = await asyncio.open_connection("127.0.0.1", port)
         except OSError:
             await asyncio.sleep(0.05)
             continue
@@ -103,7 +103,7 @@ async def test_mcp_source_discovers_governed_tool_and_persists_image_result():
         artifact_manager=artifacts,
         name_prefix="browser_",
         spec_overrides={
-            "screenshot": {"required_scopes": ("browser.read",)}
+            "screenshot": {"requires_approval": False, "required_scopes": ("browser.read",)}
         },
     )
     manager = ToolManager(artifact_manager=artifacts)
@@ -140,6 +140,7 @@ async def test_real_stdio_server_connects_discovers_executes_and_closes():
     fixture = Path(__file__).parents[2] / "scripts" / "mcp_fixture_server.py"
     config = MCPServerConfig(
         name="fixture",
+        spec_overrides={"echo": {"requires_approval": False}},
         transport="stdio",
         command=sys.executable,
         args=(str(fixture),),
@@ -201,6 +202,7 @@ async def test_real_streamable_http_server_connects_and_executes():
         source = MCPServerSource(
             MCPServerConfig(
                 name="http_fixture",
+                spec_overrides={"echo": {"requires_approval": False}},
                 transport="streamable_http",
                 url=f"http://127.0.0.1:{port}/mcp",
                 headers={"Authorization": SecretStr("Bearer test-secret")},
@@ -236,7 +238,7 @@ def test_mcp_server_config_rejects_mixed_transport_fields():
 
 
 @pytest.mark.asyncio
-async def test_default_policy_requires_approval_for_untrusted_mcp_write():
+async def test_mcp_defaults_to_tool_approval_independent_of_policy():
     session = _Session()
     manager = ToolManager()
     await manager.load_source(MCPToolSource(session, name_prefix="remote_"))
@@ -247,5 +249,5 @@ async def test_default_policy_requires_approval_for_untrusted_mcp_write():
         arguments={},
         context=_context(),
     )
-    assert decision.effect == "require_approval"
-    assert decision.reason_codes == ["policy.high_risk_write"]
+    assert decision.effect == "allow"
+    assert manager.get_spec("remote_screenshot").requires_approval is True

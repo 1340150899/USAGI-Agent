@@ -1,0 +1,22 @@
+{
+  "data_dir": ".usagi/http",
+  "host": "127.0.0.1",
+  "port": 8080,
+  "model_profile": "chat",
+  "database_environment": "debug",
+  "super_uid": "6",
+  "resume_key_env": "USAGI_RESUME_KEY",
+  "silence_seconds": 90,
+  "maximum_seconds": 900,
+  "xhs_url": "http://127.0.0.1:3000/mcp",
+  "weixin_adapter": {"url": "http://127.0.0.1:8090", "token_env": "USAGI_ADAPTER_TOKEN"},
+  "reply_routes": {"owner": "REPLACE_WITH_LOGIN_ROUTE_REF"},
+  "bindings": [
+    {"token_env": "USAGI_HTTP_TOKEN", "principal": "owner", "source": "api"},
+    {"token_env": "USAGI_WEIXIN_TOKEN", "principal": "owner", "source": "weixin",
+     "account_ref": "weixin-main"},
+    {"token_env": "USAGI_WXAUTO_TOKEN", "principal": "owner", "source": "wxauto",
+     "account_ref": "desktop-main", "sender_refs": ["owner-desktop", "contact-01"],
+     "conversation_refs": ["conversation-01"]}
+  ]
+}

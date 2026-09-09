@@ -6,8 +6,7 @@ separate from ``lease_version`` CAS.
 """
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from usagi_agent.api.errors import CASMismatch
@@ -39,14 +38,14 @@ class SqliteRunControlStore:
 
     async def create(self, state: RunControlState) -> RunControlState:
         async with self._connect() as conn:
-            await conn.execute("BEGIN")
+            await conn.execute("BEGIN IMMEDIATE")
             cols = (
                 "run_id, tenant_id, version, lease_version, run_status, "
                 "suspended_checkpoint_id, interrupt_set_digest, accepted_resume_attempt_id, budget_used, "
                 "cancel_requested_at, cancelled_at, cancellation_reason_code, cancellation_detail_ref, "
-                "lease_owner, lease_expires_at, fencing_token"
+                "lease_owner, lease_expires_at, fencing_token, final_result_ref"
             )
-            placeholders = ",".join(["?"] * 16)
+            placeholders = ",".join(["?"] * 17)
             try:
                 await conn.execute(
                     f"INSERT INTO run_controls ({cols}) VALUES ({placeholders})",
@@ -60,7 +59,7 @@ class SqliteRunControlStore:
 
     async def cas_update(self, run_id: str, expected_version: int, new_state: RunControlState) -> RunControlState:
         async with self._connect() as conn:
-            await conn.execute("BEGIN")
+            await conn.execute("BEGIN IMMEDIATE")
             cur = await conn.execute(
                 "SELECT version FROM run_controls WHERE run_id = ?", (run_id,)
             )
@@ -74,21 +73,21 @@ class SqliteRunControlStore:
                 "UPDATE run_controls SET version=?, run_status=?, suspended_checkpoint_id=?, "
                 "interrupt_set_digest=?, accepted_resume_attempt_id=?, budget_used=?, "
                 "cancel_requested_at=?, cancelled_at=?, cancellation_reason_code=?, "
-                "cancellation_detail_ref=? WHERE run_id=?",
+                "cancellation_detail_ref=?, final_result_ref=? WHERE run_id=?",
                 (bumped.version, bumped.run_status, bumped.suspended_checkpoint_id,
                  bumped.interrupt_set_digest, bumped.accepted_resume_attempt_id,
                  bumped.budget_used.model_dump_json(), _iso(bumped.cancel_requested_at),
                  _iso(bumped.cancelled_at),
                  bumped.cancellation_reason_code.value if bumped.cancellation_reason_code else None,
                  bumped.cancellation_detail_ref.artifact_id if bumped.cancellation_detail_ref else None,
-                 run_id),
+                 bumped.final_result_ref.model_dump_json() if bumped.final_result_ref else None, run_id),
             )
             await conn.commit()
         return bumped
 
     async def cas_lease(self, run_id: str, *, expected_lease_version: int, lease_owner, lease_expires_at, fencing_token) -> RunControlState:
         async with self._connect() as conn:
-            await conn.execute("BEGIN")
+            await conn.execute("BEGIN IMMEDIATE")
             cur = await conn.execute(
                 "SELECT lease_version, run_status, lease_expires_at FROM run_controls WHERE run_id = ?",
                 (run_id,),
@@ -99,7 +98,7 @@ class SqliteRunControlStore:
                 await conn.rollback()
                 raise CASMismatch(f"cas_lease {run_id}: expected lease_version {expected_lease_version}")
             # Only allow lease changes on running/resume_accepted (fencing gate semantics).
-            if row[1] not in ("running", "resume_accepted"):
+            if row[1] not in ("running", "resume_accepted") and not (row[1]=="cancel_requested" and lease_owner is None):
                 await conn.rollback()
                 raise CASMismatch(f"cas_lease {run_id}: run_status {row[1]} not leaseable")
             await conn.execute(
@@ -119,17 +118,19 @@ class SqliteRunControlStore:
             state.cancellation_reason_code.value if state.cancellation_reason_code else None,
             state.cancellation_detail_ref.artifact_id if state.cancellation_detail_ref else None,
             state.lease_owner, _iso(state.lease_expires_at), state.fencing_token,
+            state.final_result_ref.model_dump_json() if state.final_result_ref else None,
         )
 
     @staticmethod
     def _row_to_state(row: Any) -> RunControlState:
         from usagi_agent.types.run import CancellationReasonCode
+        from usagi_agent.types.refs import ArtifactRef
 
         cols = [
             "run_id", "tenant_id", "version", "lease_version", "run_status",
             "suspended_checkpoint_id", "interrupt_set_digest", "accepted_resume_attempt_id",
             "budget_used", "cancel_requested_at", "cancelled_at", "cancellation_reason_code",
-            "cancellation_detail_ref", "lease_owner", "lease_expires_at", "fencing_token",
+            "cancellation_detail_ref", "lease_owner", "lease_expires_at", "fencing_token", "final_result_ref",
         ]
         d = dict(zip(cols, row))
         return RunControlState(
@@ -142,6 +143,7 @@ class SqliteRunControlStore:
             cancel_requested_at=datetime.fromisoformat(d["cancel_requested_at"]) if d["cancel_requested_at"] else None,
             cancelled_at=datetime.fromisoformat(d["cancelled_at"]) if d["cancelled_at"] else None,
             cancellation_reason_code=CancellationReasonCode(d["cancellation_reason_code"]) if d["cancellation_reason_code"] else None,
+            final_result_ref=ArtifactRef.model_validate_json(d["final_result_ref"]) if d.get("final_result_ref") else None,
             fencing_token=d["fencing_token"],
             lease_owner=d["lease_owner"],
             lease_expires_at=datetime.fromisoformat(d["lease_expires_at"]) if d["lease_expires_at"] else None,

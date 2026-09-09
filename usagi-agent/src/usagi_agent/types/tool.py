@@ -27,7 +27,8 @@ class ToolSpec(BaseModel):
     name: str
     description: str
     parameters: dict[str, Any] = Field(default_factory=dict)
-    # Capability metadata (§21.3): risk drives retry/approval/timeout semantics.
+    requires_approval: bool = True
+    # Capability metadata (§21.3): risk drives retry/timeout semantics; approval is explicit.
     risk: Literal["read", "write", "high_risk_write"] = "read"
     write_safety: WriteSafetyMode | None = None
     # Execution budgets; enforced by ToolRuntime, not by adapters.

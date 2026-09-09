@@ -462,7 +462,7 @@ Tool 执行完成后生成 `ToolObservation` 和 `PassResult(next_pass)`；下�
 ### 7.2 Agent Run
 
 ```text
-1. Application 调用 Runtime.start_agent(RunStartRequest(scenario_key, request_idempotency_key, input, options))
+1. Application 调用 Server.create_session(RunStartRequest(scenario_key, request_idempotency_key, input, options))
 2. Gateway 授权并派生 idempotency namespace，规范化客户端请求、计算 client fingerprint，先查询 RunStartRequestStore；合法重试直接返回旧 Run
 3. 仅首次请求从只读 RuntimeBundleCatalog 获取已初始化 Bundle并计算 execution bundle fingerprint
 4. 在同库事务创建 input metadata、ExecutionContextSnapshot、RunControl、RunMetadata 和 start-outbox
@@ -885,26 +885,21 @@ class Cancelled(BaseModel):
     reason_code: CancellationReasonCode
     cancellation_detail_ref: ArtifactRef | None = None
 
-class AgentRuntime(Protocol):
-    async def start_agent(
+class Server(Protocol):
+    async def create_session(
         self, request: RunStartRequest,
         *, auth: Injected[RequestAuthContext],
-    ) -> RunHandle: ...
+    ) -> SessionMessage: ...
 
-    async def start_workflow(
-        self, request: RunStartRequest,
+    async def continue_session(
+        self, session_id: str, request: RunStartRequest,
         *, auth: Injected[RequestAuthContext],
-    ) -> RunHandle: ...
+    ) -> SessionMessage: ...
 
     async def resume(
         self, run_id: str, resume: ResumeEnvelope,
         *, auth: Injected[RequestAuthContext],
     ) -> RunHandle: ...
-
-    async def reissue_resume_token(
-        self, run_id: str, interrupt_id: str, expected_checkpoint_id: str,
-        *, auth: Injected[RequestAuthContext],
-    ) -> ResumeTokenEnvelope: ...
 
     async def issue_resume_token(
         self, run_id: str, interrupt_id: str, expected_checkpoint_id: str,
@@ -920,12 +915,9 @@ class AgentRuntime(Protocol):
         self, run_id: str, *, auth: Injected[RequestAuthContext]
     ) -> RunOutcome: ...
 
-    def stream(
-        self, run_id: str, *, auth: Injected[RequestAuthContext]
-    ) -> AsyncIterator[RunEvent]: ...
 ```
 
-启动、恢复、token 签发/补发和取消接口都只提交一次持久化状态转换并返回句柄或一次性凭据；调用方通过 `get_run` 或 `stream` 观察状态。`Completed` 才包含最终 `AgentResult/WorkflowResult`。`Suspended` 暴露经过授权过滤的 interrupt 描述，但 `get_run` 是无副作用 GET，永远不返回或消费明文 resume token；客户端必须通过 POST 语义的 `issue_resume_token/reissue_resume_token` 取得一次性凭据，响应强制 `Cache-Control: no-store`。
+创建会话、继续会话、恢复、token 签发和取消统一由 `Server` 暴露；调用方通过 `get_run` 查询状态。`Completed` 才包含最终结果。`Suspended` 暴露经过授权过滤的 interrupt 描述，但 `get_run` 是无副作用 GET，永远不返回或消费明文 resume token；客户端必须通过 POST 语义的 `issue_resume_token` 取得一次性凭据，响应强制 `Cache-Control: no-store`。
 
 `RunOutcome` 是 RunControl 的稳定公开投影：`running → Running`、`suspended → Suspended`、`resume_accepted → Resuming`、`cancel_requested → Cancelling`，终态分别映射为 `Completed/Failed/Cancelled`。仅当 Run 仍处于可推进的 `running` 时，Tool/Model unknown 需要人工处置才由图创建 `kind=external_event|approval` 的 durable operator interrupt，并把 RunControl CAS 为 `suspended`；`Suspended.reason_code=manual_required`，后续复用授权、token、ResumeAttempt 和恢复后 Revalidation 协议。处于 `cancel_requested` 或任一终态时不得逆向转 suspended，而创建独立 incident/case。`Resuming` 只暴露 attempt 与阶段，不暴露恢复 payload；`Cancelling` 返回仍在收口的外部操作计数。模型或 Tool execution 尚未得到最小 settlement、lease 尚未释放或必需 incident 尚未耐久创建时，绝不能提前返回 `Cancelled`。
 
@@ -933,25 +925,23 @@ class AgentRuntime(Protocol):
 
 | API | 必需权限 | 额外约束 |
 |---|---|---|
-| start_agent/start_workflow | `run.start` + scenario permission | original principal/tenant 从 auth 创建，不接受调用方覆盖 |
+| create_session/continue_session | `run.start` + scenario permission | original principal/tenant 和 session identity 由服务端创建，不接受调用方覆盖 |
 | get_run | `run.read` | 只返回 actor 有权查看的结果字段；run_id 仅用于定位资源 |
-| stream | `run.read` | 每个事件按当前权限和 interrupt scope 过滤，连接期间权限变化立即生效 |
 | resume | `run.resume` + 对应 interrupt scope | token 只验证一次恢复意图，不能替代 actor、scope 或当前权限 |
-| issue_resume_token | `run.resume` + 对应 interrupt scope | POST；原子创建/标记 delivery，响应 no-store；get/stream 不返回明文 token |
-| reissue_resume_token | `run.resume` + 对应 interrupt scope | checkpoint/interrupt 未变化，且无可能已调用 graph 的 attempt；仅可证明的 pre-invoke rejected 不阻止轮换 |
+| issue_resume_token | `run.resume` + 对应 interrupt scope | POST；原子创建/标记 delivery，响应 no-store；get_run 不返回明文 token |
 | cancel | `run.cancel` | 校验 tenant、owner/delegation 和当前 Run 状态，原因进入受控审计 |
 
 只有同时具有 `run.read + run.resume + interrupt scope` 的 actor 才能看到完整 InterruptDescriptor 并调用 token issuance；其他读取者只看到 `suspended` 与可公开 reason code。token 仅在 POST 受控响应中返回一次，credential 的 `delivery_status` 在同一事务中从 pending CAS 为 delivered，Store 只保存 digest；禁止进入 GET、stream 历史、缓存、日志、span、通知正文或 Artifact。审批通知只包含认证后的 UI 深链接，不携带 token。`get_run/stream/cancel` 每次调用都重新授权，`run_id`、thread ID、checkpoint ID 和 token 均不是访问凭据。
 
 第一版 Runtime **禁止同一 checkpoint 同时存在多个 active interrupt**。Compiler 对可能在同一 super-step 并行触发 HumanGate/NeedInput 的图执行静态拒绝；Runtime 在保存 interrupt set 时再做动态断言，数量不等于 1 则安全失败且不签发 token。`Suspended.interrupts` 保留 list 仅为协议前向兼容。未来支持并行 interrupt 时必须新增批量 ResumeEnvelope、逐 interrupt credential 原子消费、部分失败语义，并使用 LangGraph 的 `Command(resume={interrupt_id: value})`；不能把单个 validated ref 传给多 interrupt checkpoint。
 
-若首次响应丢失，获授权 actor 可调用 `reissue_resume_token`。Runtime 必须在同一数据库事务中确认 Run 仍为同一 `suspended_checkpoint_id + interrupt_set_digest`、目标 interrupt 仍 active，且该 source checkpoint **不存在任何可能已调用 graph 的 ResumeAttempt**。`accepted/invoking/applied/reconcile_required` 一律阻止补发；`failed` 只有携带受控 `failure_phase=pre_invoke_rejected` 且能证明从未进入 graph invocation 时才不阻止。首次 `issue_resume_token` 也执行相同检查，不能在已有 accepted attempt 后补建 credential。随后以 CAS 将旧 credential 标为 `revoked`、写入新版本 digest。旧 token 在事务提交时立即失效，新明文只在本次受控响应显示一次。补发追加不含 token/主体的 AuditFact，actor 映射写入可删除 AuditIdentityLink；不满足条件只返回 reason code，不能用“补发”绕过已接受或结果不确定的恢复。普通 Run 与 Erasure case 使用同一安全规则但不同 credential namespace。
+未来若增加 resume token 补发能力，必须在同一数据库事务中确认 Run 仍为同一 `suspended_checkpoint_id + interrupt_set_digest`、目标 interrupt 仍 active，且该 source checkpoint **不存在任何可能已调用 graph 的 ResumeAttempt**。当前 `Server` 不公开补发接口；调用方应重新获取当前挂起状态并按授权流程调用 `issue_resume_token`。
 
 第一版 `RunOptions` 只允许 absolute deadline、`CancellationReasonCode`、服务端签发的 delegation ref 和 trace propagation 等运行控制，不包含或接受调用方自报身份，也不允许覆盖 Model、Tool、MemoryPolicy、Rule、Prompt 或 Pipeline 配置。
 
 #### Run 启动的耐久幂等边界
 
-`start_agent/start_workflow` 必须要求非空 `request_idempotency_key`。Gateway 先从认证上下文生成稳定 `idempotency_namespace`，绑定 tenant、original principal 和 delegation lineage identity，但**不包含会变化的 grant/policy version**；调用方不能自报该 namespace。当前 delegation/grant version 进入 client fingerprint并在首次执行前重新授权。`RunStartRequestStore` 强制 `UNIQUE (tenant_id, idempotency_namespace, request_idempotency_key)`。查重必须发生在解析当前 RuntimeBundle 之前：命中旧记录时先重新执行 `run.read` 授权，再按已保存的 client request fingerprint 返回原 `RunHandle`；授权刷新不能让同一 delegation lineage/key 创建第二个 Run，部署后的 bundle/graph 变化也不能把合法重试变成冲突或向其他 principal 泄露键是否存在。
+`create_session/continue_session` 必须要求非空 `request_idempotency_key`。Gateway 先从认证上下文生成稳定 `idempotency_namespace`，绑定 tenant、original principal 和 delegation lineage identity，但**不包含会变化的 grant/policy version**；调用方不能自报该 namespace。当前 delegation/grant version 进入 client fingerprint并在首次执行前重新授权。`RunStartRequestStore` 强制 `UNIQUE (tenant_id, idempotency_namespace, request_idempotency_key)`。查重必须发生在解析当前 RuntimeBundle 之前：命中旧记录时先重新执行 `run.read` 授权，再按已保存的 client request fingerprint 返回原会话结果；授权刷新不能让同一 delegation lineage/key 创建第二个 Run，部署后的 bundle/graph 变化也不能把合法重试变成冲突或向其他 principal 泄露键是否存在。
 
 Runtime 在授权后先用第一版协议锁定的、与 Bundle 无关的 `api_contract_version + canonical_json_version` 规范化 client envelope（拒绝 NaN/Infinity、重复 key、未知 RunOptions 和非规范数字/时间），计算 `client_request_fingerprint`：tenant/idempotency namespace、API contract version、scenario、canonical input keyed-integrity-tag，以及 absolute deadline、受控 delegation lineage ref、当前 grant version和其他会改变请求语义的 RunOptions。它不包含当前 input schema/bundle checksum，因此可在查询旧键前计算。只有首次键未命中时才解析当前 Bundle、用其 input schema 正式验证输入，并以 `execution_bundle_fingerprint = application_version + bundle_checksum + graph_checksum + input_schema_checksum` 固化首次执行版本；Schema 验证失败不创建 Run。禁止把裸内容 hash 放入启动表。同 namespace/key 且 client fingerprint 相同返回原 Run；同键不同 client fingerprint 返回 idempotency conflict。协议 canonicalizer/API contract 版本在第一版不可热切换；未来升级必须按存量记录保留旧版本比较器。
 
@@ -3855,7 +3845,7 @@ Server Bootstrap
 → Server Ready
 
 Application
-→ runtime.start_agent(RunStartRequest("example.research_writer", request_key, input))
+→ server.create_session(RunStartRequest("example.research_writer", request_key, input))
 → Gateway 授权、派生 namespace、计算 client fingerprint并先查 RunStartRequestStore
 → 仅首次请求查找已初始化 Bundle并固化 execution bundle fingerprint
 → Kernel 原子建立 Run 记录与 start-outbox
@@ -4165,7 +4155,7 @@ A1 preview 依赖 M0B；synthetic external integration 依赖 M0B+M1 及签名�
 > 本节验收 §2.3 划定的首个正式版本范围。跨进程 settlement 属 v2（见 §2.3 单库事务边界），不在此处验收；其余条目（含完整 Erasure 与多租户隔离设计）按 v1 验收。
 
 - Server Bootstrap 完成所有静态 Bundle、Adapter 和 LangGraph 的初始化；缺少必需配置时 fail-fast。
-- start_agent/start_workflow 必须携带 request key；RunStartRequestStore 以 tenant/key/fingerprint 耐久去重，并通过原子 input metadata + ExecutionContext + RunControl + RunMetadata + start-outbox 消除重复 Run 和未启动窗口。
+- create_session/continue_session 必须携带 request key；RunStartRequestStore 以 tenant/key/fingerprint 耐久去重，并通过原子 input metadata + ExecutionContext + RunControl + RunMetadata + start-outbox 消除重复 Run 和未启动窗口。
 - Run 只按 scenario_key 查找不可变 RuntimeBundle，不解析 Spec、不创建 Adapter、不编译 Graph。
 - 启动参数只包含程序无法推导的必需值；其余本期行为直接实现，不建立外部或代码内可调配置模型。
 - AgentManager 内部根据固定开关使用 live 或 scripted 执行策略；不验收运行时动态模型切换。
@@ -4182,7 +4172,7 @@ A1 preview 依赖 M0B；synthetic external integration 依赖 M0B+M1 及签名�
 - AgentLoopState、AgentPassState、Module State 生命周期清晰，checkpoint 只含低敏路由字段和 ContextPack/AgentAction/AgentResult/ToolObservation/FinalOutput 等领域对象的 Ref。
 - Workflow 可 interrupt，并在进程重启后恢复。
 - Runtime 统一使用 `RunHandle + RunOutcome` 契约；Suspended 返回 interrupt/checkpoint/reason，但 GET 不返回 token；resume_accepted/cancel_requested 稳定映射为 Resuming/Cancelling，外部操作未收口时不得返回 Cancelled。
-- start/get/stream/resume/issue_resume_token/reissue_resume_token/cancel 全部从服务端 RequestAuthContext 授权；run_id/token 不是凭据，明文 token 仅由获授权 actor 调用 no-store POST issuance 获得。补发只在同一 suspended checkpoint 且不存在可能已调用 graph 的 attempt 时原子轮换；可证明的 pre-invoke rejected 使用新 credential/generation，旧 token 立即失效。
+- `Server.create_session/continue_session/get_run/resume/issue_resume_token/cancel` 全部从服务端 RequestAuthContext 授权；run_id/token 不是凭据，明文 token 仅由获授权 actor 调用 no-store POST issuance 获得。当前版本不公开事件流和 token 补发接口。
 - 恢复保留不可变 ExecutionContextSnapshot 的原始身份和绝对 deadline；RunControlState 明确保存 run status、suspended checkpoint、interrupt digest、accepted attempt、lease/fencing token，预算由 UsageLedger 幂等聚合。普通 version 与 lease_version 分离，预算/投影并发不能误判 heartbeat 丢失。
 - ResumeEnvelope 可判别表达 Approval、NeedInput 和 ExternalEvent；输入先进入不可读短 TTL quarantine，Runtime ResumeGuard 只读验证 LangGraph checkpoint，并在同库事务中原子完成 credential/ResumeAttempt/suspended → resume_accepted CAS；只有胜出输入可 finalize，败者被 abandoned/清扫。
 - ResumeAttempt 保存 source/resulting checkpoint 和 accepted/invoking/applied/reconcile_required 状态；发现后继 checkpoint 后禁止再次调用 graph。

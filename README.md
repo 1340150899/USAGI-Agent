@@ -4,6 +4,9 @@
 
 ## 文档
 
+- [应用接入实施记录](docs/application-integration.md) — HTTP Server 与通用工具审批进度
+- [HTTP Server](apps/httpserver/README.md) — 本地运行和审批 API
+
 - [通用 Agent Framework 架构](docs/generic-agent-framework.md) — 框架权威设计（§29 工程结构、§7.1 bootstrap 序列等）
 - [Agent 技术架构方案](docs/agent-architecture.md) — 小红书业务应用架构
 - [原始需求流程图](requirements-flow.jpg)
@@ -28,7 +31,10 @@ USAGI-Agent/
 │  │  └─ server/               # 组合根：application_container(init 树根) + bootstrap + server(执行)
 │  └─ tests/                    # contract + pipeline 测试
 ├─ plugins/                     # 可替换插件（§26，首版不实现 manifest 加载）
-├─ apps/xhs-autopost/           # 首个业务应用（仅骨架）
+├─ apps/httpserver/             # 应用组合入口、持久化队列、审批和通知
+├─ apps/weixin-adapter/         # 独立 Node 微信通信进程，无 OpenClaw 宿主
+├─ apps/wechat-edge/            # Windows wxauto 素材采集进程
+├─ apps/xhs-autopost/           # 小红书 MCP 辅助 CLI 与兼容层
 └─ examples/structured_agent/   # 业务无关端到端示例：research_writer
 ```
 
@@ -57,15 +63,15 @@ ApplicationContainer.init(settings, scenarios)
  ├─ CatalogBuilder.build                 → 每 scenario: 六 Rule 装配 + LangGraph 编译 → RuntimeBundle  # §7.1
  ├─ health_check                         → 任一必需 Bundle 不全 → 启动失败  # §7.1 step8
  ├─ ErasureInitializer.init              → ErasureCoordinator        # §24.5
- └─ KernelRuntime(catalog, ports, ...)   # 执行根：只持有，不再 init
-Server(runtime, ...)                     # 持 runtime 暴露 start/resume/cancel（纯执行）
+ └─ _KernelRuntime(catalog, ports, ...)  # 私有执行引擎
+Server(runtime, ...)                     # 唯一公开的会话执行接口
 ```
 
 ## 安装与运行
 
 ```bash
 pip install -e usagi-agent
-# 端到端示例（InMemory 后端，两轮：Tool → next_pass → Final → run_completed）
+# 端到端示例（SQLite 后端，两轮：Tool → next_pass → Final → run_completed）
 python -m examples.structured_agent.run
 # 测试（State 契约 / Bundle 校验 / FencedCheckpointer gate / ThreadControlBinding 唯一 / 六 Rule 流程 / 幂等）
 pytest usagi-agent/tests
@@ -73,7 +79,7 @@ pytest usagi-agent/tests
 
 ## 范围说明（v1）
 
-- **完整实现（可运行、有 dev 实现）**：类型/Spec/Port、InMemory+SQLite 持久化、FencedCheckpointer
+- **完整实现（可运行、有 dev 实现）**：类型/Spec/Port、SQLite 持久化、FencedCheckpointer
   （含 fencing gate）、Kernel Runtime 启动/取消/查询、PipelineCompiler+不变量、六 Rule+AgentLoop、
   ToolRuntime、MemoryManager、Policy/Guardrail、ArtifactManager、UsageLedger/AuditStore、OTel、
   research_writer 端到端示例与核心 contract test。

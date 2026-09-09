@@ -27,6 +27,11 @@ class RunContext:
     deadline: datetime | None
     fencing_token: int
     trace_parent: str | None = None
+    session_id: str | None = None
+
+    @property
+    def memory_session_id(self) -> str:
+        return self.session_id or self.thread_id
 
     def to_tool_context(self) -> ToolContext:
         return ToolContext(
@@ -38,6 +43,7 @@ class RunContext:
                 control_kind="run",
                 control_id=self.run_id,
                 fencing_token=self.fencing_token,
+                session_id=self.memory_session_id,
             )
         )
 

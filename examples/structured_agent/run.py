@@ -23,29 +23,37 @@ class ResearchRequest(BaseModel):
     query: str
 
 
-def build_server(*, use_scripted_model: bool = True) -> Server:
+def build_server(
+    database_path: str | Path,
+    *,
+    use_scripted_model: bool = True,
+    requires_approval: bool = False,
+) -> Server:
     runtime = ServiceRuntimeInitializer.init(
         BootstrapSettings(
+            sqlite_path=str(database_path),
             model_execution_mode="scripted" if use_scripted_model else "live"
         )
     )
-    runtime.tool_manager.register(SearchToolAdapter())
+    tool = SearchToolAdapter()
+    tool.spec = tool.spec.model_copy(update={"requires_approval": requires_approval})
+    runtime.tool_manager.register(tool)
     create_research_writer_agent(runtime.agent_manager)
     ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
     return Server(runtime)
 
 
 async def main() -> None:
-    server = build_server()
+    server = build_server(Path(".usagi/example-runtime.db"))
     request = RunStartRequest(
         scenario_key="example.research_writer",
         request_idempotency_key="demo-run-1",
         input=ResearchRequest(query="summarize agent frameworks"),
         options=RunOptions(),
     )
-    handle = await server.start_agent(request)
-    outcome = await server.get_run(handle.run_id)
-    print(f"run_id={handle.run_id} outcome={outcome.kind}")
+    message = await server.create_session(request)
+    outcome = await server.get_run(message.run_id)
+    print(f"run_id={message.run_id} outcome={outcome.kind}")
     await server.shutdown()
 
 

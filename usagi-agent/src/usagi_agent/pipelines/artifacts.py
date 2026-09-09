@@ -1,6 +1,9 @@
 """Artifact serialization helpers available to business stage implementations."""
 from __future__ import annotations
 
+import hashlib
+import json
+
 from collections.abc import AsyncIterator
 from typing import Literal, TypeVar
 
@@ -80,7 +83,9 @@ async def put_recall_bundle(
         RecallBundle(source=source, hits=hits),
         tenant_id=tenant_id,
         scope_id=scope_id,
-        operation_id=f"recall:{source}:{run_id}",
+        operation_id=f"recall:{source}:{run_id}:" + hashlib.sha256(
+            json.dumps(hits, sort_keys=True, ensure_ascii=False).encode()
+        ).hexdigest(),
     )
 
 

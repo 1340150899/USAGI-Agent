@@ -14,6 +14,10 @@ class ToolAdapter(ABC):
 
     spec: ToolSpec
 
+    def __init__(self, *, spec: ToolSpec | None = None) -> None:
+        if spec is not None:
+            self.spec = spec
+
     @abstractmethod
     async def execute(
         self, arguments: dict[str, object], context: ToolContext

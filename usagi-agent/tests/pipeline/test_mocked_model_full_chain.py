@@ -22,7 +22,7 @@ class _Request(BaseModel):
 
 
 class _LargeSearchTool(ToolAdapter):
-    spec = ToolSpec(
+    spec = ToolSpec(requires_approval=False,
         name="web_search",
         description="Return a mocked search result.",
         parameters={
@@ -118,7 +118,7 @@ async def test_mocked_model_runs_tool_protocol_and_final_answer(tmp_path):
     runtime = ServiceRuntimeInitializer.init(
         BootstrapSettings(
             model_execution_mode="scripted",
-            memory_path=str(tmp_path / "memory.json"),
+            sqlite_path=str(tmp_path / "runtime.db"),
         )
     )
     model = _ProtocolCheckingModel()
@@ -137,7 +137,7 @@ async def test_mocked_model_runs_tool_protocol_and_final_answer(tmp_path):
     ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
     server = Server(runtime)
 
-    handle = await server.start_agent(
+    handle = await server.create_session(
         RunStartRequest(
             scenario_key="example.research_writer",
             request_idempotency_key="mock-full-chain",
@@ -173,7 +173,7 @@ async def test_mocked_model_runs_tool_protocol_and_final_answer(tmp_path):
         )
     )
     session = await runtime.memory_manager.get_session_context(
-        handle.thread_id, tool_context
+        handle.session_id, tool_context
     )
     assert session.compacted_until is None
     assert session.open_tasks == []

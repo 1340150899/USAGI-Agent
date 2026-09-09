@@ -446,6 +446,11 @@ class MCPToolSource:
 
     async def load(self) -> tuple[MCPToolAdapter, ...]:
         raw_tools = await self._list_all_tools()
+        if self._enabled_tools is not None:
+            available = {str(_value(raw, "name", default="")) for raw in raw_tools}
+            missing = set(self._enabled_tools) - self._disabled_tools - available
+            if missing:
+                raise ValueError(f"configured MCP tools not found: {sorted(missing)}")
         tools: list[MCPToolAdapter] = []
         local_names: set[str] = set()
         for raw in raw_tools:

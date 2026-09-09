@@ -8,6 +8,7 @@ from examples.structured_agent.run import build_server
 from usagi_agent.api.errors import SafeError
 from usagi_agent.kernel.context import RunContext
 from usagi_agent.memory.manager import DefaultMemoryManager
+from usagi_agent.memory.store import MemoryStores
 from usagi_agent.memory.types import PreparedContext, RawEvent, SessionContext
 from usagi_agent.pipelines.artifacts import get_model
 from usagi_agent.pipelines.config import AgentPipelineConfig
@@ -217,8 +218,8 @@ async def test_context_build_runs_filter_chain_before_rank_chain():
     assert recalled_contexts == {"long_term_memory": ["3", "2"]}
 
 
-def test_compaction_request_batches_an_oldest_prefix_within_model_window():
-    server = build_server()
+def test_compaction_request_batches_an_oldest_prefix_within_model_window(tmp_path):
+    server = build_server(tmp_path / "runtime.db")
     base_agent = server.runtime.agent_manager.get("research_writer")
     agent = base_agent.model_copy(
         update={
@@ -253,8 +254,8 @@ def test_compaction_request_batches_an_oldest_prefix_within_model_window():
     assert processor._compaction_input_tokens(payload) <= 700
 
 
-def test_compaction_request_rejects_one_event_larger_than_model_window():
-    server = build_server()
+def test_compaction_request_rejects_one_event_larger_than_model_window(tmp_path):
+    server = build_server(tmp_path / "runtime.db")
     base_agent = server.runtime.agent_manager.get("research_writer")
     agent = base_agent.model_copy(
         update={
@@ -283,8 +284,8 @@ def test_compaction_request_rejects_one_event_larger_than_model_window():
 
 
 @pytest.mark.asyncio
-async def test_context_is_compressed_once_and_only_model_stage_invokes_model(monkeypatch):
-    server = build_server()
+async def test_context_is_compressed_once_and_only_model_stage_invokes_model(monkeypatch, tmp_path):
+    server = build_server(tmp_path / "runtime.db")
     runtime = server.runtime
     scenario = runtime.scenario_registry.get("example.research_writer")
     processor = PipelineProcessor(scenario.config, runtime)
@@ -327,9 +328,11 @@ async def test_context_is_compressed_once_and_only_model_stage_invokes_model(mon
 async def test_llm_compaction_is_applied_then_restarts_the_pipeline(
     tmp_path,
 ):
-    server = build_server()
+    server = build_server(tmp_path / "runtime.db")
     runtime = server.runtime
-    runtime.memory_manager = DefaultMemoryManager(path=tmp_path / "memory.json")
+    runtime.memory_manager = DefaultMemoryManager(
+        MemoryStores.sqlite(tmp_path / "processor-memory.db")
+    )
     scenario = runtime.scenario_registry.get("example.research_writer")
     processor = PipelineProcessor(scenario.config, runtime)
     context = _context()

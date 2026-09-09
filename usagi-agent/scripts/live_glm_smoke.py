@@ -30,7 +30,7 @@ class SmokeRequest(BaseModel):
 
 
 class _VisibleLiveAdapter:
-    """Expose provider failures that KernelRuntime otherwise projects as run.failed."""
+    """Expose provider failures that the private engine projects as run.failed."""
 
     adapter_ref = "usagi.live_smoke_visible_adapter"
 
@@ -64,7 +64,7 @@ async def main() -> None:
         runtime = ServiceRuntimeInitializer.init(
             BootstrapSettings(
                 model_execution_mode="live",
-                memory_path=str(Path(temp_dir) / "memory.json"),
+                sqlite_path=str(Path(temp_dir) / "runtime.db"),
             )
         )
         agent = runtime.agent_manager.create_agent(
@@ -99,7 +99,7 @@ async def main() -> None:
             ),
             options=RunOptions(),
         )
-        handle = await server.start_agent(request)
+        handle = await server.create_session(request)
         outcome = await server.get_run(handle.run_id)
         snapshot = await runtime.persistence.execution_context_store.get(handle.run_id)
         control = await runtime.persistence.run_control_store.get(handle.run_id)

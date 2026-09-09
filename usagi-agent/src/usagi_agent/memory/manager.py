@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 from typing import Iterable, Literal
 from uuid import uuid4
 
-from usagi_agent.memory.store import MemoryStores
+from usagi_agent.memory.store import MemoryStores, _encode_namespace_label
 from usagi_agent.memory.tokens import estimate_tokens
 from usagi_agent.memory.types import (
     ContextPolicy,
@@ -35,24 +34,31 @@ class DefaultMemoryManager:
 
     def __init__(
         self,
-        stores: MemoryStores | None = None,
-        *,
-        path: str | Path = ".usagi/memory.json",
+        stores: MemoryStores,
     ) -> None:
-        self.stores = stores or MemoryStores.json_files(path)
+        self.stores = stores
 
     @staticmethod
     def _identity(ctx: ToolContext) -> tuple[str, str]:
         execution = ctx.execution
-        return execution.tenant_id, execution.principal.principal_opaque_id
+        return (
+            _encode_namespace_label(execution.tenant_id),
+            _encode_namespace_label(execution.principal.principal_opaque_id),
+        )
 
     def _events_ns(self, session_id: str, ctx: ToolContext) -> tuple[str, ...]:
         tenant_id, principal_id = self._identity(ctx)
-        return ("raw_conversations", tenant_id, principal_id, session_id)
+        return (
+            "raw_conversations", tenant_id, principal_id,
+            _encode_namespace_label(session_id),
+        )
 
     def _session_ns(self, session_id: str, ctx: ToolContext) -> tuple[str, ...]:
         tenant_id, principal_id = self._identity(ctx)
-        return ("short_term_memory", tenant_id, principal_id, session_id)
+        return (
+            "short_term_memory", tenant_id, principal_id,
+            _encode_namespace_label(session_id),
+        )
 
     def _memory_ns(self, ctx: ToolContext) -> tuple[str, ...]:
         tenant_id, principal_id = self._identity(ctx)
@@ -241,6 +247,12 @@ class DefaultMemoryManager:
                 events, memory_candidates or [], ctx
             )
             session.extracted_until = checkpoint
+            await self.stores.short_term.aput(
+                self._session_ns(session_id, ctx),
+                f"compression:{checkpoint}",
+                session.model_dump(mode="json"),
+                index=False,
+            )
         if operation_id:
             session.applied_operation_ids.append(operation_id)
         await self.save_session_context(session_id, session, ctx)

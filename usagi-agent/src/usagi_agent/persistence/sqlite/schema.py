@@ -1,13 +1,74 @@
 """SQLite schema DDL (design §10.6, §24.1, §9 of the application doc).
 
-All root tables carry a non-null ``tenant_id`` participating in unique keys / foreign keys
-(§2.3: single-tenant ``default`` still enforces this). The checkpoint tables and run
-control share the same DB so ``FencedCheckpointer.put/aput`` can atomically verify the
-fencing gate inside the checkpoint write transaction (§10.6).
+Run-control and checkpoint tables share one database so fenced writes can validate the
+authoritative thread binding, lease owner and fencing token in the same transaction.
 """
 from __future__ import annotations
 
+_REMOVED_EMPTY_TABLES = (
+    "run_start_requests",
+    "execution_contexts",
+    "resume_attempts",
+    "interrupt_credentials",
+)
+
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS store_states (
+    name TEXT PRIMARY KEY,
+    payload TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid      TEXT NOT NULL UNIQUE,
+    uptime   TEXT NOT NULL,
+    crtime   TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id       TEXT PRIMARY KEY,
+    uid      TEXT NOT NULL,
+    status   TEXT NOT NULL CHECK (status IN ('idle','running','pending_approval','closed')),
+    uptime   TEXT NOT NULL,
+    crtime   TEXT NOT NULL,
+    FOREIGN KEY (uid) REFERENCES users(uid)
+);
+CREATE TABLE IF NOT EXISTS short_term_memory (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    type        TEXT NOT NULL,
+    is_compress INTEGER NOT NULL DEFAULT 0,
+    uptime      TEXT NOT NULL,
+    crtime      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_short_term_session ON short_term_memory(session_id,id);
+
+CREATE TABLE IF NOT EXISTS long_term_memory (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid     TEXT NOT NULL,
+    text    TEXT NOT NULL,
+    type    TEXT,
+    uptime  TEXT NOT NULL,
+    crtime  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_long_term_uid ON long_term_memory(uid,id);
+
+CREATE TABLE IF NOT EXISTS tool_observation_memory (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid     TEXT NOT NULL,
+    text    TEXT NOT NULL,
+    type    TEXT,
+    uptime  TEXT NOT NULL,
+    crtime  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_tool_memory_uid ON tool_observation_memory(uid,id);
+
+CREATE TABLE IF NOT EXISTS artifact_blobs (
+    key TEXT PRIMARY KEY,
+    payload BLOB NOT NULL
+);
+
 -- ThreadControlBinding (§10.6): globally unique thread_id; cross-tenant same thread rejected.
 CREATE TABLE IF NOT EXISTS thread_control_bindings (
     tenant_id      TEXT NOT NULL,
@@ -17,37 +78,6 @@ CREATE TABLE IF NOT EXISTS thread_control_bindings (
     graph_checksum TEXT NOT NULL,
     PRIMARY KEY (tenant_id, thread_id),
     UNIQUE (thread_id)
-);
-
--- Run start request (§10.5): idempotency dedup before Bundle resolution.
-CREATE TABLE IF NOT EXISTS run_start_requests (
-    tenant_id                 TEXT NOT NULL,
-    idempotency_namespace     TEXT NOT NULL,
-    request_idempotency_key   TEXT NOT NULL,
-    scenario_key              TEXT NOT NULL,
-    client_request_fingerprint TEXT NOT NULL,
-    execution_bundle_fingerprint TEXT,
-    run_id                    TEXT NOT NULL,
-    input_metadata_ref        TEXT,
-    status                    TEXT NOT NULL DEFAULT 'pending',
-    created_at                TEXT NOT NULL,
-    PRIMARY KEY (tenant_id, idempotency_namespace, request_idempotency_key)
-);
-
--- Execution context (immutable, §10.6).
-CREATE TABLE IF NOT EXISTS execution_contexts (
-    run_id            TEXT PRIMARY KEY,
-    tenant_id         TEXT NOT NULL,
-    thread_id         TEXT NOT NULL,
-    scenario_key      TEXT NOT NULL,
-    original_principal TEXT NOT NULL,
-    authorization_scope TEXT NOT NULL,
-    created_at        TEXT NOT NULL,
-    absolute_deadline TEXT,
-    bundle_checksum   TEXT NOT NULL,
-    graph_checksum    TEXT NOT NULL,
-    application_version TEXT NOT NULL,
-    secret_refs       TEXT NOT NULL
 );
 
 -- Run control (§10.6): ordinary `version` vs independent `lease_version`.
@@ -68,39 +98,6 @@ CREATE TABLE IF NOT EXISTS run_controls (
     lease_owner                  TEXT,
     lease_expires_at             TEXT,
     fencing_token                INTEGER NOT NULL
-);
-
--- Resume attempts (§10.6).
-CREATE TABLE IF NOT EXISTS resume_attempts (
-    resume_attempt_id   TEXT PRIMARY KEY,
-    run_id              TEXT NOT NULL,
-    source_checkpoint_id TEXT NOT NULL,
-    source_interrupt_set_digest TEXT,
-    validated_payload_ref TEXT,
-    auth_link_id        TEXT NOT NULL,
-    status              TEXT NOT NULL,
-    invocation_generation INTEGER NOT NULL DEFAULT 0,
-    fencing_token       INTEGER NOT NULL,
-    resulting_checkpoint_id TEXT,
-    failure_reason_code TEXT,
-    failure_phase       TEXT
-);
-
--- Interrupt credentials (§10.6).
-CREATE TABLE IF NOT EXISTS interrupt_credentials (
-    credential_id      TEXT PRIMARY KEY,
-    run_id             TEXT NOT NULL,
-    interrupt_id       TEXT NOT NULL,
-    checkpoint_id      TEXT NOT NULL,
-    interrupt_set_digest TEXT NOT NULL,
-    token_digest       TEXT NOT NULL,
-    version             INTEGER NOT NULL,
-    status              TEXT NOT NULL,
-    delivery_status     TEXT NOT NULL,
-    issued_at           TEXT NOT NULL,
-    delivered_at        TEXT,
-    expires_at          TEXT NOT NULL,
-    consumed_by_attempt_id TEXT
 );
 
 -- Checkpoints + pending writes (LangGraph contract; fenced on write).
@@ -133,3 +130,17 @@ CREATE TABLE IF NOT EXISTS checkpoint_writes (
 def apply_schema(conn) -> None:
     """Execute the full DDL on a sqlite3/aiosqlite connection."""
     conn.executescript(SCHEMA)
+    for table in _REMOVED_EMPTY_TABLES:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        if not exists:
+            continue
+        if conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
+            raise RuntimeError(
+                f"legacy table {table!r} contains data; migrate it before upgrading"
+            )
+        conn.execute(f"DROP TABLE {table}")
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(run_controls)")}
+    if "final_result_ref" not in columns:
+        conn.execute("ALTER TABLE run_controls ADD COLUMN final_result_ref TEXT")

@@ -169,7 +169,7 @@ async def run_one(server: Server, runtime, path: Path, args) -> bool:
             )
         ],
     )
-    handle = await server.start_agent(request)
+    handle = await server.create_session(request)
     outcome = await server.get_run(handle.run_id)
     usage_after = runtime.agent_manager.usage_for_agent("research_writer")
 
@@ -233,7 +233,7 @@ async def recognize_folder(args: argparse.Namespace) -> int:
         runtime = ServiceRuntimeInitializer.init(
             BootstrapSettings(
                 model_execution_mode="live",
-                memory_path=str(Path(temp_dir) / "memory.json"),
+                sqlite_path=str(Path(temp_dir) / "runtime.db"),
             )
         )
         model = ModelSpec(

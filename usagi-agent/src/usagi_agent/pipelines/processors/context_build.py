@@ -139,7 +139,7 @@ class ContextBuildProcessor(StageProcessor):
     ) -> PreparedContext:
         model = self.agent.model
         return await self.runtime.memory_manager.prepare_context(
-            context.thread_id,
+            context.memory_session_id,
             context.to_tool_context(),
             ContextPolicy(
                 context_window=model.context_window,

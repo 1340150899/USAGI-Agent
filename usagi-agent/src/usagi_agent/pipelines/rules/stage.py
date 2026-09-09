@@ -127,7 +127,7 @@ class ResultProcessRuleOutput(_StageData):
     tool_observation_refs: tuple[str, ...] = ()
     reason_codes: tuple[str, ...] = ()
     side_effect_receipt_refs: tuple[str, ...] = ()
-    # A rule may terminate the pass early (e.g. a human rejected approval);
+    # A rule may terminate the pass early (e.g. a budget or finality gate);
     # the End router then preserves this disposition unchanged.
     pass_disposition: Literal["next_pass", "run_completed", "run_failed"] | None = None
 

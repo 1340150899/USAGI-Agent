@@ -1,0 +1,18 @@
+[Unit]
+Description=USAGI standalone Weixin adapter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=usagi
+WorkingDirectory=/opt/usagi/apps/weixin-adapter
+EnvironmentFile=/etc/usagi/application.env
+Environment=USAGI_WEIXIN_CONFIG=/opt/usagi/apps/weixin-adapter/config.json
+ExecStart=/usr/bin/node dist/main.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

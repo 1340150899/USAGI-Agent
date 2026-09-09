@@ -5,25 +5,19 @@ from usagi_agent.persistence.ports.artifact import ArtifactManager, ArtifactMeta
 from usagi_agent.ports import ToolContext
 from usagi_agent.tools.adapter import ToolAdapter
 from usagi_agent.types.refs import ArtifactRef
+from usagi_agent.tools.spec import ARTIFACT_READER_SPEC
 from usagi_agent.types.tool import ToolSpec
 
 
 class ArtifactReaderTool(ToolAdapter):
-    spec = ToolSpec(
-        name="artifact_reader",
-        description="Read a run artifact by its opaque artifact id.",
-        parameters={
-            "type": "object",
-            "properties": {"artifact_id": {"type": "string", "description": "Opaque artifact id"}},
-            "required": ["artifact_id"],
-            "additionalProperties": False,
-        },
-    )
+    spec = ARTIFACT_READER_SPEC
 
     def __init__(
-        self, artifact_manager: ArtifactManager, metadata_store: ArtifactMetadataStore
+        self, artifact_manager: ArtifactManager, metadata_store: ArtifactMetadataStore,
+        *, spec: ToolSpec | None = None,
     ) -> None:
         self._artifact_manager = artifact_manager
+        super().__init__(spec=spec)
         self._metadata_store = metadata_store
 
     async def execute(self, arguments: dict[str, object], context: ToolContext) -> dict[str, object]:

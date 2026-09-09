@@ -64,7 +64,7 @@ async def test_success_returns_output_and_fills_latency():
     manager = _manager()
     manager.register(
         _ProbeTool(
-            spec=ToolSpec(
+            spec=ToolSpec(requires_approval=False,
                 name="echo",
                 description="echo",
                 parameters={
@@ -93,7 +93,7 @@ async def test_success_returns_output_and_fills_latency():
 async def test_invalid_arguments_fail_with_reason_without_execution():
     manager = _manager()
     tool = _ProbeTool(
-        spec=ToolSpec(
+        spec=ToolSpec(requires_approval=False,
             name="echo",
             description="echo",
             parameters={
@@ -131,7 +131,7 @@ async def test_invalid_arguments_fail_with_reason_without_execution():
 @pytest.mark.asyncio
 async def test_missing_scopes_denies_with_reason():
     manager = _manager()
-    spec = ToolSpec(name="scoped", description="d", required_scopes=("tool.execute",))
+    spec = ToolSpec(requires_approval=False, name="scoped", description="d", required_scopes=("tool.execute",))
     tool = _ProbeTool(spec=spec, behavior=_ok)
     manager.register(tool)
     observation = await manager.execute(
@@ -151,7 +151,7 @@ async def test_read_timeout_fails_with_reason():
         return {}
     manager.register(
         _ProbeTool(
-            spec=ToolSpec(name="slow", description="d", timeout_seconds=0.01),
+            spec=ToolSpec(requires_approval=False, name="slow", description="d", timeout_seconds=0.01),
             behavior=slow,
         )
     )
@@ -171,7 +171,7 @@ async def test_write_timeout_is_unknown_never_assumed_failed():
         return {}
     manager.register(
         _ProbeTool(
-            spec=ToolSpec(
+            spec=ToolSpec(requires_approval=False,
                 name="publish",
                 description="d",
                 risk="write",
@@ -203,7 +203,7 @@ async def test_read_retries_transient_failure_then_succeeds():
 
     manager.register(
         _ProbeTool(
-            spec=ToolSpec(
+            spec=ToolSpec(requires_approval=False,
                 name="flaky", description="d", max_retries=1, retry_backoff_seconds=0.0
             ),
             behavior=flaky,
@@ -222,7 +222,7 @@ async def test_adapter_exception_reports_type_name_only():
     async def boom(arguments):
         raise RuntimeError("secret http://key@internal")
     manager.register(
-        _ProbeTool(spec=ToolSpec(name="boom", description="d"), behavior=boom)
+        _ProbeTool(spec=ToolSpec(requires_approval=False, name="boom", description="d"), behavior=boom)
     )
     observation = await manager.execute(
         name="boom", arguments={}, context=_context(), tool_call_id="c"
@@ -241,7 +241,7 @@ async def test_oversized_output_is_truncated():
 
     manager.register(
         _ProbeTool(
-            spec=ToolSpec(name="big", description="d", max_output_bytes=1_000),
+            spec=ToolSpec(requires_approval=False, name="big", description="d", max_output_bytes=1_000),
             behavior=big,
         )
     )
@@ -258,7 +258,7 @@ async def test_oversized_output_is_truncated():
 async def test_execution_record_settles_and_replay_skips_execution():
     store = InMemoryToolExecutionStore()
     manager = _manager(store)
-    tool = _ProbeTool(spec=ToolSpec(name="echo", description="d"), behavior=_ok)
+    tool = _ProbeTool(spec=ToolSpec(requires_approval=False, name="echo", description="d"), behavior=_ok)
     manager.register(tool)
     ctx = _context(control_id="run_replay")
 
@@ -311,7 +311,7 @@ async def test_spec_validation_rejects_inconsistent_write_safety():
     with pytest.raises(ValueError, match="write_safety"):
         manager.register(
             _ProbeTool(
-                spec=ToolSpec(
+                spec=ToolSpec(requires_approval=False,
                     name="bad", description="d", risk="write", write_safety=None
                 ),
                 behavior=_ok,
@@ -320,7 +320,7 @@ async def test_spec_validation_rejects_inconsistent_write_safety():
     with pytest.raises(ValueError, match="write_safety"):
         manager.register(
             _ProbeTool(
-                spec=ToolSpec(
+                spec=ToolSpec(requires_approval=False,
                     name="bad2", description="d", risk="read", write_safety="reconcile"
                 ),
                 behavior=_ok,

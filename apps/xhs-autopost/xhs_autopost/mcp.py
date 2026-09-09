@@ -9,23 +9,14 @@ from usagi_agent.tools import MCPServerConfig
 
 XHS_MCP_PACKAGE = "xhs-mcp@0.8.13"
 
-# These operations only retrieve data. Pinning their risk classification here is
-# deliberate: MCP annotations are untrusted and can vary between server releases.
-SAFE_XHS_TOOLS = (
-    "xhs_auth_status",
-    "xhs_discover_feeds",
-    "xhs_search_note",
-    "xhs_get_note_detail",
-    "xhs_get_user_notes",
-)
-
-WRITE_XHS_TOOLS = (
-    "xhs_auth_login",
-    "xhs_auth_logout",
-    "xhs_comment_on_note",
-    "xhs_delete_note",
-    "xhs_publish_content",
-)
+try:
+    from usagi_httpserver.tool_specs import SAFE_XHS_TOOLS, WRITE_XHS_TOOLS, XHS_TOOL_SPECS
+except ModuleNotFoundError as exc:
+    if exc.name != "usagi_httpserver":
+        raise
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "httpserver"))
+    from usagi_httpserver.tool_specs import SAFE_XHS_TOOLS, WRITE_XHS_TOOLS, XHS_TOOL_SPECS
 
 
 def _npx_command() -> str:
@@ -41,26 +32,7 @@ def build_xhs_mcp_config(
     """Build a least-privilege xhs-mcp connection for one application runtime."""
 
     enabled_tools = SAFE_XHS_TOOLS + (WRITE_XHS_TOOLS if allow_writes else ())
-    overrides: dict[str, dict[str, object]] = {
-        name: {
-            "risk": "read",
-            "timeout_seconds": 120.0,
-            "max_retries": 1,
-        }
-        for name in SAFE_XHS_TOOLS
-    }
-    # --allow-writes authorizes this test application's writes without a prompt.
-    # Keep write semantics and at-most-once execution to avoid duplicate posts.
-    overrides.update(
-        {
-            name: {
-                "risk": "write",
-                "write_safety": "at_most_once_manual",
-                "timeout_seconds": 300.0,
-            }
-            for name in WRITE_XHS_TOOLS
-        }
-    )
+    overrides = {name: dict(spec) for name, spec in XHS_TOOL_SPECS.items()}
 
     common = {
         "name": "xhs",

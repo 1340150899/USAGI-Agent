@@ -39,6 +39,8 @@ from usagi_agent.types.action import ToolObservation
 from usagi_agent.types.content import ContentPart
 from usagi_agent.types.refs import ArtifactRef
 from usagi_agent.types.tool import ToolAdapterResult, ToolSpec
+from usagi_agent.tools.approval import ToolApprovalGate
+from usagi_agent.persistence.ports.approval import ApprovalStore
 
 if TYPE_CHECKING:
     from usagi_agent.tools.mcp import MCPServerConfig
@@ -52,8 +54,10 @@ class ToolManager:
         *,
         execution_store: ToolExecutionStore | None = None,
         artifact_manager: ArtifactManager | None = None,
+        approval_store: ApprovalStore | None = None,
     ) -> None:
         self._tools: dict[str, ToolAdapter] = {}
+        self.approvals = ToolApprovalGate(approval_store, artifact_manager)
         self._execution_store = execution_store
         self._artifact_manager = artifact_manager
         self._semaphores: dict[str, asyncio.Semaphore] = {}
@@ -154,6 +158,7 @@ class ToolManager:
         context: ToolContext,
         tool_call_id: str = "",
         operation_id: str | None = None,
+        approval_result: dict | None = None,
     ) -> ToolObservation:
         started = time.monotonic()
         try:
@@ -187,6 +192,16 @@ class ToolManager:
             )
 
         execution_id = operation_id or self._execution_id(name, context, tool_call_id)
+        if spec.requires_approval:
+            allowed = await self.approvals.check(
+                name=name, arguments=arguments, context=context, operation_id=execution_id,
+                approval_result=approval_result,
+            )
+            if not allowed:
+                return self._observation(
+                    name, tool_call_id, started, "denied", error_code="tool.denied",
+                    error_message="tool approval missing, rejected, or expired",
+                )
         if self._execution_store is not None:
             replayed = await self._replay_settled(execution_id)
             if replayed is not None:
@@ -357,10 +372,10 @@ class ToolManager:
         if existing is not None:
             return None
         now = datetime.now(timezone.utc)
-        await self._execution_store.reserve(
+        reserved = await self._execution_store.reserve(
             ToolManager._record(execution_id, name, spec, context, now)
         )
-        return True
+        return True if reserved.created_at == now else None
 
     @staticmethod
     def _record(

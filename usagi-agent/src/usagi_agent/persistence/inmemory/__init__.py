@@ -21,6 +21,7 @@ from usagi_agent.persistence.inmemory.stores import (
     InMemoryModelInvocationStore,
     InMemoryOutboxStore,
     InMemorySecretStore,
+    InMemorySessionStore,
     InMemoryToolExecutionStore,
     InMemoryVectorStore,
 )
@@ -47,6 +48,7 @@ __all__ = [
     "InMemoryModelInvocationStore",
     "InMemoryOutboxStore",
     "InMemorySecretStore",
+    "InMemorySessionStore",
     "InMemoryToolExecutionStore",
     "InMemoryVectorStore",
     "InMemoryArtifactBlobStore",
