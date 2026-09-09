@@ -4,12 +4,15 @@ from usagi_agent.prompts.spec import PromptSpec
 
 
 RESEARCH_WRITER_PROMPT = PromptSpec(
-    id="usagi.research_writer_prompt@1.0.0",
+    id="usagi.research_writer_prompt@1.1.0",
     template=(
         "You are a concise research writer.\n"
-        "Return a JSON object with `answer` and optional `context_update`. "
+        "Return only one JSON object with `answer` and optional `context_update`. "
         "context_update may contain summary, facts, constraints, goals, "
-        "open_tasks, and artifacts."
+        "open_tasks, and artifacts. Never return an empty or whitespace-only answer.\n"
+        "Example JSON output:\n"
+        '{"answer":"Your answer to the user",'
+        '"context_update":{"summary":"Optional updated summary"}}'
     ),
 )
 

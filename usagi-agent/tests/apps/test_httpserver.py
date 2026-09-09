@@ -10,6 +10,9 @@ sys.path.insert(0, str(Path(__file__).parents[3] / "apps" / "httpserver"))
 from examples.structured_agent.run import build_server
 from usagi_httpserver.api import create_app
 from usagi_httpserver.bootstrap import _bootstrap_settings
+from usagi_httpserver.bootstrap import build_server as build_http_server
+
+from usagi_agent.models import DEFAULT_MODEL
 
 
 def test_http_bootstrap_passes_local_telemetry_settings(tmp_path):
@@ -34,6 +37,21 @@ def test_http_bootstrap_passes_local_telemetry_settings(tmp_path):
     assert settings.service_name == "test-http"
     assert settings.service_instance_id == "test-1"
     assert settings.deployment_environment == "test"
+
+
+@pytest.mark.asyncio
+async def test_http_server_uses_framework_default_model(tmp_path):
+    server = await build_http_server(
+        settings={
+            "data_dir": str(tmp_path),
+            "model_execution_mode": "scripted",
+            "resume_hmac_key": "x" * 32,
+        }
+    )
+    try:
+        assert server.runtime.agent_manager.get("research_writer").model is DEFAULT_MODEL
+    finally:
+        await server.runtime.shutdown()
 
 
 def test_http_no_longer_exposes_approval_control_endpoints(tmp_path):

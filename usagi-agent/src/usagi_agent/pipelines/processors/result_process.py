@@ -171,7 +171,11 @@ class ResultProcessProcessor(StageProcessor):
             action_type = "failure"
         elif tool_actions:
             action_type = "tool"
-        elif response.content_ref is not None:
+        elif (
+            response.content_ref is not None
+            and response.content is not None
+            and response.content.strip()
+        ):
             action = FinalAction(
                 output_ref=response.content_ref,
                 output_schema="usagi.final_output@1.0.0",
@@ -240,7 +244,10 @@ class ResultProcessProcessor(StageProcessor):
         Compaction responses are excluded: their outcome is applied by
         CompactionApplyRule, not by generic turn recording.
         """
-        if response is None or (not response.content and not tool_actions):
+        if response is None or (
+            (response.content is None or not response.content.strip())
+            and not tool_actions
+        ):
             return []
         receipt_refs: list[str] = []
         metadata: dict[str, object] = {"run_id": context.run_id}

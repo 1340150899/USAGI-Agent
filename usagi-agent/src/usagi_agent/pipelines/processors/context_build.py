@@ -188,7 +188,7 @@ class ContextBuildProcessor(StageProcessor):
                     + json.dumps(structured, ensure_ascii=False),
                 }
             )
-        messages.extend(self._event_to_message(event) for event in prepared.recent_events)
+        messages.extend(self._events_to_messages(prepared.recent_events))
         grouped_payload = {
             key: items for key, items in recalled_groups.items() if items
         }
@@ -388,3 +388,50 @@ class ContextBuildProcessor(StageProcessor):
             if tool_call_id:
                 message["tool_call_id"] = str(tool_call_id)
         return message
+
+    @classmethod
+    def _events_to_messages(cls, events: list[RawEvent]) -> list[dict[str, object]]:
+        """Project memory events into complete Chat Completions turns.
+
+        A failed or interrupted run can leave an assistant tool-call event without
+        every corresponding tool result. Providers reject that history, so omit
+        incomplete protocol fragments while retaining later user messages.
+        """
+        messages: list[dict[str, object]] = []
+        index = 0
+        while index < len(events):
+            event = events[index]
+            message = cls._event_to_message(event)
+            calls = message.get("tool_calls")
+            if event.role == "assistant" and isinstance(calls, list) and calls:
+                expected_ids = {
+                    str(call.get("id"))
+                    for call in calls
+                    if isinstance(call, dict) and call.get("id")
+                }
+                tool_messages: list[dict[str, object]] = []
+                observed_ids: set[str] = set()
+                cursor = index + 1
+                while cursor < len(events) and events[cursor].role == "tool":
+                    tool_message = cls._event_to_message(events[cursor])
+                    tool_call_id = tool_message.get("tool_call_id")
+                    if (
+                        isinstance(tool_call_id, str)
+                        and tool_call_id in expected_ids
+                        and tool_call_id not in observed_ids
+                    ):
+                        tool_messages.append(tool_message)
+                        observed_ids.add(tool_call_id)
+                    cursor += 1
+                if expected_ids and observed_ids == expected_ids:
+                    messages.append(message)
+                    messages.extend(tool_messages)
+                elif message.get("content") not in (None, "", []):
+                    message.pop("tool_calls", None)
+                    messages.append(message)
+                index = cursor
+                continue
+            if event.role != "tool":
+                messages.append(message)
+            index += 1
+        return messages

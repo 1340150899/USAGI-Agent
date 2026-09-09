@@ -37,7 +37,9 @@ python -m usagi_httpserver --config apps/httpserver/config.json
 
 仅测试聊天可将 `xhs_url` 设为 `null`。HTTP 默认本机 8080，Node 默认 8090，MCP 默认 3000。Windows 跨机器访问使用 TLS 反向代理或受信任隧道；Node 和 MCP 保持内网。MCP 与 HTTP 必须共享 media 绝对路径和读取权限；容器部署时挂载同一目录。浏览器登录需部署账号实际完成。
 
-`model_profile` 默认为 `chat`（GLM 普通 API）。使用项目已有的 Coding Plan 资源时设为 `coding_plan`，走 Responses 接口；两者均读取 `GLM_API_KEY`。普通 API 返回余额不足不代表 Coding Plan 资源不可用。
+`model_profile` 默认为 `chat`（DeepSeek V4 Flash），读取
+`DEEPSEEK_API_KEY`。使用项目已有的 GLM Coding Plan 资源时设为
+`coding_plan`，走 Responses 接口并读取 `GLM_API_KEY`。
 
 `tool_specs.py` 是审批配置入口。所有工具默认需要审批，包括查询；只想发布工具审批时，显式将所需查询工具设为 `requires_approval=False`。变更后重启以重新注册。
 

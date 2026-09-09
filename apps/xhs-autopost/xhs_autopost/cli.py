@@ -12,21 +12,20 @@ import uuid
 from pathlib import Path
 
 from pydantic import BaseModel
-
-from usagi_agent.models import GLM_5_3_FLASH_MODEL, GLM_5_3_FLASH_CODING_PLAN_MODEL
+from usagi_agent.models import DEFAULT_MODEL, GLM_5_3_FLASH_CODING_PLAN_MODEL
 from usagi_agent.persistence.ports.artifact import ArtifactManager
 from usagi_agent.pipelines import ScenarioPipelineInitializer
 from usagi_agent.pipelines.artifacts import get_text
 from usagi_agent.pipelines.config.stage_config import SCENARIO_CONFIGS
-from usagi_agent.registry import BootstrapSettings
 from usagi_agent.ports import GovernedExecutionContext, ToolContext
+from usagi_agent.registry import BootstrapSettings
 from usagi_agent.server import Server, ServiceRuntimeInitializer
 from usagi_agent.types.content import ImageContentPart
 from usagi_agent.types.refs import ArtifactOwner
 from usagi_agent.types.run import RunOptions, RunStartRequest
+from usagi_httpserver.tool_specs import PYTHON_TOOL_SPECS
 
 from xhs_autopost.mcp import build_xhs_mcp_config
-from usagi_httpserver.tool_specs import PYTHON_TOOL_SPECS
 
 
 class XhsRequest(BaseModel):
@@ -104,9 +103,10 @@ async def run(args: argparse.Namespace) -> int:
     image_paths = [path.resolve(strict=True) for path in args.image]
     if not args.list_tools and not args.query:
         raise ValueError("请提供 query，或使用 --list-tools 只验证 MCP 连接")
-    if not args.list_tools and not os.getenv(GLM_5_3_FLASH_MODEL.api_key_env):
+    model = GLM_5_3_FLASH_CODING_PLAN_MODEL if args.coding_plan else DEFAULT_MODEL
+    if not args.list_tools and not os.getenv(model.api_key_env):
         raise RuntimeError(
-            f"缺少环境变量 {GLM_5_3_FLASH_MODEL.api_key_env}，无法调用模型"
+            f"缺少环境变量 {model.api_key_env}，无法调用模型"
         )
 
     runtime = ServiceRuntimeInitializer.init(
@@ -135,7 +135,6 @@ async def run(args: argparse.Namespace) -> int:
         allowed_tools = tuple(adapter.spec.name for adapter in adapters)
         # The current framework scenario is generic. Application behavior is
         # supplied in the request while the business MCP remains in this package.
-        model = GLM_5_3_FLASH_CODING_PLAN_MODEL if args.coding_plan else GLM_5_3_FLASH_MODEL
         runtime.agent_manager.create_agent(
             id="research_writer",
             input_schema="xhs.agent_request@1.0.0",

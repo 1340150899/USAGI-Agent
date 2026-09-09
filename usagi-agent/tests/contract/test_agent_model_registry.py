@@ -5,7 +5,14 @@ from pydantic import ValidationError
 
 from usagi_agent.agents import AgentManager, AgentManagerInitializer, AgentSpec
 from usagi_agent.kernel.context import RunContext
-from usagi_agent.models import GLM_5_2_MODEL, GLM_5_3_FLASH_MODEL, ModelSpec
+from usagi_agent.models import (
+    DEEPSEEK_V4_FLASH_VISION_EXP_MODEL,
+    DEFAULT_MODEL,
+    GLM_5_2_MODEL,
+    GLM_5_3_FLASH_MODEL,
+    MODEL_SPECS,
+    ModelSpec,
+)
 from usagi_agent.registry import BootstrapSettings
 from usagi_agent.types.action import ToolAction
 from usagi_agent.types.model import ModelRequest, ModelResponse, ModelToolCall
@@ -28,6 +35,18 @@ def test_model_catalog_is_static_and_not_registered_in_agent_manager():
     assert GLM_5_2_MODEL.base_url == "https://open.bigmodel.cn/api/paas/v4/"
     assert GLM_5_3_FLASH_MODEL.provider_model == "glm-5.3-flash"
     assert GLM_5_3_FLASH_MODEL.input_modalities == frozenset({"text", "image"})
+    assert DEEPSEEK_V4_FLASH_VISION_EXP_MODEL.provider_model == "deepseek-v4-flash-vision-exp"
+    assert DEEPSEEK_V4_FLASH_VISION_EXP_MODEL.input_modalities == frozenset(
+        {"text", "image"}
+    )
+    assert DEEPSEEK_V4_FLASH_VISION_EXP_MODEL.base_url == "https://api.deepseek.com"
+    assert DEEPSEEK_V4_FLASH_VISION_EXP_MODEL.api_key_env == "DEEPSEEK_API_KEY"
+    assert DEEPSEEK_V4_FLASH_VISION_EXP_MODEL.context_window == 1_000_000
+    assert DEEPSEEK_V4_FLASH_VISION_EXP_MODEL.extra_body == {
+        "thinking": {"type": "disabled"}
+    }
+    assert DEFAULT_MODEL is DEEPSEEK_V4_FLASH_VISION_EXP_MODEL
+    assert DEEPSEEK_V4_FLASH_VISION_EXP_MODEL in MODEL_SPECS
     assert not hasattr(manager, "register_model")
     assert not hasattr(manager, "get_model")
 

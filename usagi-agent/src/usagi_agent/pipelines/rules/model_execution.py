@@ -58,18 +58,32 @@ class ModelExecutionRule(ModelRuleAdapterConfig):
                 "gen_ai.operation.name": "chat",
             },
         ) as telemetry:
-            response = await runtime.agent_manager.generate(
-                agent_id=input.agent_id,
-                request=request,
-                context=context.to_tool_context(),
-            )
+            response = None
+            attempt_request = request
+            for attempt in range(2):
+                response = await runtime.agent_manager.generate(
+                    agent_id=input.agent_id,
+                    request=attempt_request,
+                    context=context.to_tool_context(),
+                )
+                runtime.observability.record_model_usage(
+                    response.usage,
+                    agent=input.agent_id,
+                    model=model_spec.provider_model,
+                )
+                if response.tool_calls or (
+                    response.content is not None and response.content.strip()
+                ):
+                    break
+                if attempt == 1:
+                    raise RuntimeError("model returned empty content after one retry")
+                if attempt_request.structured_output:
+                    attempt_request = attempt_request.model_copy(
+                        update={"structured_output": False}
+                    )
+            assert response is not None
             telemetry.set_attribute(
                 "gen_ai.response.finish_reasons", response.finish_reason
-            )
-            runtime.observability.record_model_usage(
-                response.usage,
-                agent=input.agent_id,
-                model=model_spec.provider_model,
             )
         if response.content is not None:
             content_ref = await put_bytes(

@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from pydantic import SecretStr
-from usagi_agent.models import GLM_5_3_FLASH_CODING_PLAN_MODEL, GLM_5_3_FLASH_MODEL
+from usagi_agent.models import DEFAULT_MODEL, GLM_5_3_FLASH_CODING_PLAN_MODEL
 from usagi_agent.pipelines import ScenarioPipelineInitializer
 from usagi_agent.pipelines.config.stage_config import SCENARIO_CONFIGS
 from usagi_agent.registry import BootstrapSettings
@@ -37,7 +37,7 @@ def _bootstrap_settings(settings: dict, data: Path, key: str) -> BootstrapSettin
 async def build_server(*, xhs_url: str | None = None, settings=None):
     settings = settings or {}
     profiles = {
-        "chat": GLM_5_3_FLASH_MODEL,
+        "chat": DEFAULT_MODEL,
         "coding_plan": GLM_5_3_FLASH_CODING_PLAN_MODEL,
     }
     profile = settings.get("model_profile", "chat")

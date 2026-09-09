@@ -6,14 +6,19 @@ import pytest
 from pydantic import BaseModel
 
 from usagi_agent.models import GLM_5_2_MODEL
-from usagi_agent.ports import GovernedExecutionContext, ToolContext
 from usagi_agent.pipelines import ScenarioPipelineInitializer
 from usagi_agent.pipelines.artifacts import get_text
 from usagi_agent.pipelines.config.stage_config import SCENARIO_CONFIGS
+from usagi_agent.ports import GovernedExecutionContext, ToolContext
 from usagi_agent.registry import BootstrapSettings
 from usagi_agent.server import Server, ServiceRuntimeInitializer
 from usagi_agent.tools import ToolAdapter, ToolSpec
-from usagi_agent.types.model import ModelRequest, ModelResponse, ModelToolCall, ModelUsage
+from usagi_agent.types.model import (
+    ModelRequest,
+    ModelResponse,
+    ModelToolCall,
+    ModelUsage,
+)
 from usagi_agent.types.run import RunOptions, RunStartRequest
 
 
@@ -22,7 +27,8 @@ class _Request(BaseModel):
 
 
 class _LargeSearchTool(ToolAdapter):
-    spec = ToolSpec(requires_approval=False,
+    spec = ToolSpec(
+        requires_approval=False,
         name="web_search",
         description="Return a mocked search result.",
         parameters={
@@ -52,9 +58,7 @@ class _ProtocolCheckingModel:
     def __init__(self) -> None:
         self.requests: list[ModelRequest] = []
 
-    async def generate(
-        self, request: ModelRequest, ctx: ToolContext
-    ) -> ModelResponse:
+    async def generate(self, request: ModelRequest, ctx: ToolContext) -> ModelResponse:
         self.requests.append(request)
         call_number = len(self.requests)
         if call_number == 1:
@@ -76,13 +80,10 @@ class _ProtocolCheckingModel:
             assistant_calls = [
                 message
                 for message in request.messages
-                if message.get("role") == "assistant"
-                and message.get("tool_calls")
+                if message.get("role") == "assistant" and message.get("tool_calls")
             ]
             tool_results = [
-                message
-                for message in request.messages
-                if message.get("role") == "tool"
+                message for message in request.messages if message.get("role") == "tool"
             ]
             assert len(assistant_calls) == 1
             assert len(tool_results) == 1
@@ -111,6 +112,59 @@ class _ProtocolCheckingModel:
 
     async def health(self):
         return "healthy"
+
+
+class _BlankResponseModel:
+    adapter_ref = "test.blank_response_model"
+
+    def __init__(self, *, recover: bool) -> None:
+        self.recover = recover
+        self.requests: list[ModelRequest] = []
+
+    async def generate(self, request: ModelRequest, ctx: ToolContext) -> ModelResponse:
+        self.requests.append(request)
+        if self.recover and len(self.requests) == 2:
+            return ModelResponse(
+                content=json.dumps({"answer": "recovered answer"}),
+                finish_reason="stop",
+                usage=ModelUsage(input_tokens=11, output_tokens=3),
+            )
+        return ModelResponse(
+            content="   ",
+            finish_reason="stop",
+            usage=ModelUsage(input_tokens=10, output_tokens=2),
+        )
+
+    async def health(self):
+        return "healthy"
+
+
+class _WhitespaceAnswerModel(_BlankResponseModel):
+    async def generate(self, request: ModelRequest, ctx: ToolContext) -> ModelResponse:
+        self.requests.append(request)
+        return ModelResponse(
+            content=json.dumps({"answer": "   "}),
+            finish_reason="stop",
+            usage=ModelUsage(input_tokens=10, output_tokens=3),
+        )
+
+
+def _build_blank_response_server(model: _BlankResponseModel, tmp_path) -> Server:
+    runtime = ServiceRuntimeInitializer.init(
+        BootstrapSettings(
+            model_execution_mode="scripted",
+            sqlite_path=str(tmp_path / "runtime.db"),
+        )
+    )
+    runtime.agent_manager.set_model_adapter(model)
+    runtime.agent_manager.create_agent(
+        id="research_writer",
+        input_schema="usagi.agent_request@1.0.0",
+        output_schema="usagi.final_output@1.0.0",
+        model=GLM_5_2_MODEL,
+    )
+    ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
+    return Server(runtime)
 
 
 @pytest.mark.asyncio
@@ -148,9 +202,12 @@ async def test_mocked_model_runs_tool_protocol_and_final_answer(tmp_path):
     outcome = await server.get_run(handle.run_id)
 
     assert outcome.kind == "completed"
-    assert await get_text(
-        runtime.persistence.artifact_manager, outcome.result_ref.artifact_id
-    ) == "mock final answer"
+    assert (
+        await get_text(
+            runtime.persistence.artifact_manager, outcome.result_ref.artifact_id
+        )
+        == "mock final answer"
+    )
     assert search.calls == 1
     assert len(model.requests) == 2
     assert [
@@ -179,3 +236,84 @@ async def test_mocked_model_runs_tool_protocol_and_final_answer(tmp_path):
     assert session.open_tasks == []
     assert session.summary == ""
     await server.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_blank_model_response_is_retried_once(tmp_path):
+    model = _BlankResponseModel(recover=True)
+    server = _build_blank_response_server(model, tmp_path)
+    try:
+        handle = await server.create_session(
+            RunStartRequest(
+                scenario_key="example.research_writer",
+                request_idempotency_key="blank-then-recover",
+                input=_Request(query="hello"),
+            )
+        )
+        outcome = await server.get_run(handle.run_id)
+
+        assert outcome.kind == "completed"
+        assert (
+            await get_text(
+                server.runtime.persistence.artifact_manager,
+                outcome.result_ref.artifact_id,
+            )
+            == "recovered answer"
+        )
+        assert len(model.requests) == 2
+        assert [request.structured_output for request in model.requests] == [
+            True,
+            False,
+        ]
+        assert (
+            server.runtime.agent_manager.usage_for_agent(
+                "research_writer"
+            ).output_tokens
+            == 5
+        )
+    finally:
+        await server.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_repeated_blank_model_response_fails_instead_of_delivering_it(tmp_path):
+    model = _BlankResponseModel(recover=False)
+    server = _build_blank_response_server(model, tmp_path)
+    try:
+        handle = await server.create_session(
+            RunStartRequest(
+                scenario_key="example.research_writer",
+                request_idempotency_key="always-blank",
+                input=_Request(query="hello"),
+            )
+        )
+        outcome = await server.get_run(handle.run_id)
+
+        assert outcome.kind == "failed"
+        assert len(model.requests) == 2
+        assert [request.structured_output for request in model.requests] == [
+            True,
+            False,
+        ]
+    finally:
+        await server.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_structured_whitespace_answer_is_not_a_successful_result(tmp_path):
+    model = _WhitespaceAnswerModel(recover=False)
+    server = _build_blank_response_server(model, tmp_path)
+    try:
+        handle = await server.create_session(
+            RunStartRequest(
+                scenario_key="example.research_writer",
+                request_idempotency_key="whitespace-answer",
+                input=_Request(query="hello"),
+            )
+        )
+        outcome = await server.get_run(handle.run_id)
+
+        assert outcome.kind == "failed"
+        assert len(model.requests) == 1
+    finally:
+        await server.shutdown()

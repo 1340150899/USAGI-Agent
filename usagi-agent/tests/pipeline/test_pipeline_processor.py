@@ -283,6 +283,47 @@ def test_compaction_request_rejects_one_event_larger_than_model_window(tmp_path)
         processor._fit_compaction_batch(prepared)
 
 
+def test_context_build_omits_incomplete_tool_call_history():
+    events = [
+        RawEvent(
+            event_id="assistant-call",
+            session_id="thread",
+            role="assistant",
+            metadata={
+                "tool_calls": [
+                    {
+                        "tool_name": "first",
+                        "tool_call_id": "call-1",
+                        "arguments": {},
+                    },
+                    {
+                        "tool_name": "second",
+                        "tool_call_id": "call-2",
+                        "arguments": {},
+                    },
+                ]
+            },
+        ),
+        RawEvent(
+            event_id="partial-result",
+            session_id="thread",
+            role="tool",
+            content_parts=[TextContentPart(text="partial")],
+            metadata={"tool_call_id": "call-1"},
+        ),
+        RawEvent(
+            event_id="next-user",
+            session_id="thread",
+            role="user",
+            content_parts=[TextContentPart(text="hello")],
+        ),
+    ]
+
+    assert ContextBuildProcessor._events_to_messages(events) == [
+        {"role": "user", "content": "hello"}
+    ]
+
+
 @pytest.mark.asyncio
 async def test_context_is_compressed_once_and_only_model_stage_invokes_model(monkeypatch, tmp_path):
     server = build_server(tmp_path / "runtime.db")

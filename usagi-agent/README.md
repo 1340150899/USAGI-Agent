@@ -131,6 +131,8 @@ imports business-side stage implementations.
 invocation, multiple `ModelSpec` registrations, prompts, model limits, pricing metadata
 and per-agent/per-model token usage. Model definitions live in one catalog and are
 installed by `AgentManagerInitializer`; the model stage only invokes the manager.
+The exported `DEFAULT_MODEL` is DeepSeek V4 Flash and reads its credential from
+`DEEPSEEK_API_KEY`; applications can still select another catalog entry explicitly.
 
 All memory behavior is behind `DefaultMemoryManager`: raw events, structured short-term
 session state, pre-call token measurement/rolling compaction, explicit and compaction-
