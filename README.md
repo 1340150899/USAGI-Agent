@@ -1,5 +1,7 @@
 # USAGI-Agent
 
+[OpenTelemetry 监控与 OTLP Collector 配置](docs/open-telemetry.md)
+
 一个基于 LangGraph 工作流引擎的标准、通用、可扩展 Agent Framework；小红书自动发帖是基于该框架实现的首个业务应用。
 
 ## 文档

@@ -9,6 +9,7 @@ the rule contract. Every failure becomes a reason-carrying observation fed
 back to the model. Rejecting an approval denies only that action; remaining
 actions in the same model response continue through their own approval gates.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -21,6 +22,7 @@ from langgraph.types import interrupt
 
 from usagi_agent.kernel.context import RunContext
 from usagi_agent.memory.types import ToolObservationMemory
+from usagi_agent.observability import operation
 from usagi_agent.pipelines.artifacts import (
     get_model,
     put_model,
@@ -70,9 +72,20 @@ class ToolExecutionRule(ResultProcessAdapterConfig):
                     message=f"tool action artifact not found: {action_ref}",
                 )
             tool_operation_id = f"tool:execute:{context.run_id}:{action.tool_call_id}"
-            outcome = await self._execute_one(
-                action, runtime, context, operation_id=tool_operation_id
-            )
+            with operation(
+                runtime.observability,
+                "tool.execute",
+                **{"usagi.tool.name": action.tool_name},
+            ) as telemetry:
+                outcome = await self._execute_one(
+                    action, runtime, context, operation_id=tool_operation_id
+                )
+                telemetry.set_outcome(outcome.observation.status)
+                if outcome.observation.error_code:
+                    telemetry.set_attribute(
+                        "error.type", outcome.observation.error_code
+                    )
+                runtime.observability.record_tool(outcome.observation)
             observation = outcome.observation
             ref = await put_model(
                 artifact_manager,
@@ -121,12 +134,15 @@ class ToolExecutionRule(ResultProcessAdapterConfig):
             )
             if observation.status == "success":
                 candidate_operation_id = (
-                    f"memory:tool-observation:{context.run_id}:"
-                    f"{action.tool_call_id}"
+                    f"memory:tool-observation:{context.run_id}:{action.tool_call_id}"
                 )
                 candidate = await self._persist_observation_candidate(
-                    action, observation, outcome.arguments,
-                    event.event_id, runtime, context,
+                    action,
+                    observation,
+                    outcome.arguments,
+                    event.event_id,
+                    runtime,
+                    context,
                     operation_id=candidate_operation_id,
                 )
                 receipt_refs.append(
@@ -163,19 +179,30 @@ class ToolExecutionRule(ResultProcessAdapterConfig):
                     status="failed",
                     error_code="tool.parse_error",
                     error_message=(
-                        "model arguments were not valid JSON: "
-                        f"{action.arguments_error}"
+                        f"model arguments were not valid JSON: {action.arguments_error}"
                     ),
                 ),
                 arguments=arguments,
             )
-        decision = await runtime.policy_engine.evaluate(
-            principal=context.principal,
-            action="tool.execute",
-            tool_name=action.tool_name,
-            arguments=arguments,
-            context=tool_context,
-        )
+        with operation(
+            runtime.observability,
+            "policy.evaluate",
+            **{
+                "usagi.policy.action": "tool.execute",
+                "usagi.tool.name": action.tool_name,
+            },
+        ) as telemetry:
+            decision = await runtime.policy_engine.evaluate(
+                principal=context.principal,
+                action="tool.execute",
+                tool_name=action.tool_name,
+                arguments=arguments,
+                context=tool_context,
+            )
+            telemetry.set_outcome(decision.effect)
+            runtime.observability.record_policy(
+                action="tool.execute", effect=decision.effect
+            )
         if decision.effect == "deny":
             reasons = ", ".join(decision.reason_codes) or "policy denied"
             return _ExecutionOutcome(
@@ -192,8 +219,11 @@ class ToolExecutionRule(ResultProcessAdapterConfig):
 
         async def execute(approval_result=None):
             return await runtime.tool_manager.execute(
-                name=action.tool_name, arguments=arguments, context=tool_context,
-                tool_call_id=action.tool_call_id, operation_id=operation_id,
+                name=action.tool_name,
+                arguments=arguments,
+                context=tool_context,
+                tool_call_id=action.tool_call_id,
+                operation_id=operation_id,
                 approval_result=approval_result,
             )
 

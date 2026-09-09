@@ -38,7 +38,10 @@ class RecallProcessor(StageProcessor):
         )
         stage_patch: RecallStagePatch = {}
         for config in self.rules:
-            result = await config.recall(rule_input, self.runtime, context)
+            result = await self.run_rule(
+                "recall", config.name,
+                config.recall(rule_input, self.runtime, context),
+            )
             if isinstance(result, RuleExecutionError):
                 self.raise_on_error(result, config.name)
             if result is None:

@@ -1,10 +1,12 @@
 """Framework rule that executes one fully prepared model request."""
+
 from __future__ import annotations
 
 import base64
 from typing import TYPE_CHECKING, Literal
 
 from usagi_agent.kernel.context import RunContext
+from usagi_agent.observability import operation
 from usagi_agent.pipelines.artifacts import get_model, put_bytes, put_model
 from usagi_agent.pipelines.rules.model import ModelRuleAdapterConfig
 from usagi_agent.pipelines.rules.stage import ModelRuleInput, ModelRuleOutput
@@ -47,11 +49,28 @@ class ModelExecutionRule(ModelRuleAdapterConfig):
             model_spec.input_modalities,
             runtime.persistence.artifact_manager,
         )
-        response = await runtime.agent_manager.generate(
-            agent_id=input.agent_id,
-            request=request,
-            context=context.to_tool_context(),
-        )
+        with operation(
+            runtime.observability,
+            "model.invoke",
+            **{
+                "usagi.agent.name": input.agent_id,
+                "gen_ai.request.model": model_spec.provider_model,
+                "gen_ai.operation.name": "chat",
+            },
+        ) as telemetry:
+            response = await runtime.agent_manager.generate(
+                agent_id=input.agent_id,
+                request=request,
+                context=context.to_tool_context(),
+            )
+            telemetry.set_attribute(
+                "gen_ai.response.finish_reasons", response.finish_reason
+            )
+            runtime.observability.record_model_usage(
+                response.usage,
+                agent=input.agent_id,
+                model=model_spec.provider_model,
+            )
         if response.content is not None:
             content_ref = await put_bytes(
                 runtime.persistence.artifact_manager,
@@ -93,9 +112,7 @@ class ModelExecutionRule(ModelRuleAdapterConfig):
                 message["content"] = content if "text" in modalities else ""
             elif isinstance(content, list):
                 selected: list[object] = []
-                parts = select_content_parts(
-                    parse_content_parts(content), modalities
-                )
+                parts = select_content_parts(parse_content_parts(content), modalities)
                 for part in parts:
                     if isinstance(part, ImageContentPart):
                         selected.append(

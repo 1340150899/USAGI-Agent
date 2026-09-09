@@ -38,9 +38,13 @@ class BootstrapSettings(BaseModel):
     service_version: str = "0.1.0"
     service_instance_id: str = "usagi-agent-1"
     deployment_environment: str = "dev"
+    otel_exporter: Literal["none", "console", "otlp"] = "none"
     otel_endpoint: str | None = Field(
-        default=None, description="OTLP endpoint. None -> console exporter."
+        default=None,
+        description="OTLP/HTTP base endpoint; setting it selects the OTLP exporter.",
     )
+    otel_trace_sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
+    otel_metric_export_interval_millis: int = Field(default=60_000, ge=1_000)
 
     # --- Encryption / attestation (§24.4, §16) ---
     encryption_kek_ref: str | None = Field(

@@ -96,7 +96,10 @@ class ResultProcessProcessor(StageProcessor):
                 return stage_patch
             stage_patch["tool_call_count"] = used + calls
         for config in self.rules:
-            result = await config.process_result(rule_input, self.runtime, context)
+            result = await self.run_rule(
+                "result_process", config.name,
+                config.process_result(rule_input, self.runtime, context),
+            )
             if isinstance(result, RuleExecutionError):
                 self.raise_on_error(result, config.name)
             if result is None or isinstance(result, RuleExecutionError):

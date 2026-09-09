@@ -51,7 +51,10 @@ class PreRecallProcessor(StageProcessor):
             iteration=state.get("iteration", 0),
         )
         for config in self.rules:
-            result = await config.pre_recall(rule_input, self.runtime, context)
+            result = await self.run_rule(
+                "pre_recall", config.name,
+                config.pre_recall(rule_input, self.runtime, context),
+            )
             if isinstance(result, RuleExecutionError):
                 self.raise_on_error(result, config.name)
             if result is None:

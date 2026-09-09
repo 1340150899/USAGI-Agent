@@ -326,8 +326,13 @@ class _KernelRuntime:
 
     async def cancel(self, run_id: str, reason_code: CancellationReasonCode, *, auth=None) -> RunHandle:
         await self._authorize_run(run_id, auth, "run.cancel")
-        with span(self._obs, "workflow.run", run_id=run_id):  # run_id ok-ish; metric attr forbidden
+        with span(
+            self._obs,
+            "workflow.run",
+            **{"usagi.workflow.operation": "cancel"},
+        ) as telemetry:
             state = await self._rcm.request_cancel(run_id, reason_code)
+            telemetry.set_outcome(state.run_status)
         return RunHandle(
             run_id=run_id, thread_id=run_id, scenario_key="",
             outcome=self._project(run_id, state), created_at=_now(),
@@ -387,21 +392,34 @@ class _KernelRuntime:
                 ),
             }
         }
-        heartbeat = asyncio.create_task(
-            self._keep_lease_alive(run_id, state.lease_owner or "", state.fencing_token)
-        )
-        try:
-            result = await scenario.compiled_graph.ainvoke(
-                Command(resume=resume.model_dump(mode="python")), config
+        with span(
+            self._obs,
+            "workflow.run",
+            **{
+                "usagi.workflow.operation": "resume",
+                "usagi.scenario.name": snapshot.scenario_key,
+            },
+        ) as telemetry:
+            heartbeat = asyncio.create_task(
+                self._keep_lease_alive(run_id, state.lease_owner or "", state.fencing_token)
             )
-            await self._finish_graph_result(run_id, scenario, config, result, snapshot)
-        except Exception as exc:
-            log.exception("run %s failed while resuming the pipeline", run_id)
-            await self._rcm.to_failed(run_id, [type(exc).__name__])
-        finally:
-            heartbeat.cancel()
-            with suppress(asyncio.CancelledError):
-                await heartbeat
+            try:
+                result = await scenario.compiled_graph.ainvoke(
+                    Command(resume=resume.model_dump(mode="python")), config
+                )
+                await self._finish_graph_result(run_id, scenario, config, result, snapshot)
+            except Exception as exc:
+                log.exception("run %s failed while resuming the pipeline", run_id)
+                telemetry.set_outcome("failed")
+                telemetry.set_attribute("error.type", type(exc).__name__)
+                await self._rcm.to_failed(run_id, [type(exc).__name__])
+            finally:
+                heartbeat.cancel()
+                with suppress(asyncio.CancelledError):
+                    await heartbeat
+            final_state = await self._ports.run_control_store.get(run_id)
+            if final_state is not None:
+                telemetry.set_outcome(final_state.run_status)
 
         return await self._build_handle(run_id)
 
@@ -521,11 +539,21 @@ class _KernelRuntime:
         ))
 
         # Drive the compiled graph (dev: inline worker; production: separate Worker).
-        with span(self._obs, "workflow.run", scenario=request.scenario_key):
+        with span(
+            self._obs,
+            "workflow.run",
+            **{
+                "usagi.workflow.operation": "start",
+                "usagi.scenario.name": request.scenario_key,
+            },
+        ) as telemetry:
             await self._drive(
                 run_id, scenario, input_ref, request, auth_context,
                 thread_id, session_id,
             )
+            final_state = await self._ports.run_control_store.get(run_id)
+            if final_state is not None:
+                telemetry.set_outcome(final_state.run_status)
 
         return await self._build_handle(run_id)
 

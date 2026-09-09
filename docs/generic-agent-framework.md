@@ -3660,6 +3660,8 @@ Port 让开发环境轻量、生产环境可扩展；明确数据所有者避免
 
 ### 25.1 OpenTelemetry 架构
 
+仓库现有埋点、指标清单与 OTLP 配置见 [OpenTelemetry 监控](open-telemetry.md)。
+
 服务运行观测统一使用 OpenTelemetry：
 
 ```text

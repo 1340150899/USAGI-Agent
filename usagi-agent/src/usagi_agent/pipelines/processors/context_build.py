@@ -109,8 +109,9 @@ class ContextBuildProcessor(StageProcessor):
             for rule in self.config.filters:
                 filtered: list[object] = []
                 for recalled_context in remaining:
-                    outcome = await rule.filter_context(
-                        recalled_context, self.runtime, context
+                    outcome = await self.run_rule(
+                        "context_build", rule.name,
+                        rule.filter_context(recalled_context, self.runtime, context),
                     )
                     if isinstance(outcome, RuleExecutionError):
                         self.raise_on_error(outcome, rule.name)
@@ -128,7 +129,10 @@ class ContextBuildProcessor(StageProcessor):
     ) -> None:
         for items in groups.values():
             for rule in self.config.rankers:
-                result = await rule.rank_context(items, self.runtime, context)
+                result = await self.run_rule(
+                    "context_build", rule.name,
+                    rule.rank_context(items, self.runtime, context),
+                )
                 if isinstance(result, RuleExecutionError):
                     self.raise_on_error(result, rule.name)
                 if result is not None:

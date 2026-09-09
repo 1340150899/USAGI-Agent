@@ -50,7 +50,10 @@ class EndProcessor(StageProcessor):
         stage_patch: EndStagePatch = {}
         new_observation_refs: list[str] = []
         for config in self.rules:
-            result = await config.end(rule_input, self.runtime, context)
+            result = await self.run_rule(
+                "end", config.name,
+                config.end(rule_input, self.runtime, context),
+            )
             if isinstance(result, RuleExecutionError):
                 self.raise_on_error(result, config.name)
             if result is None:

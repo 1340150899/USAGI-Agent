@@ -1,12 +1,16 @@
 """Compile one fixed six-stage business pipeline into a LangGraph graph."""
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from itertools import pairwise
+from typing import TYPE_CHECKING, Any
 
-from langgraph.graph import END, START, StateGraph
 from langchain_core.runnables import RunnableConfig
+from langgraph.graph import END, START, StateGraph
 
 from usagi_agent.kernel.context import RunContext
+from usagi_agent.observability import operation
 from usagi_agent.pipelines.loop.state import AgentRunState
 from usagi_agent.pipelines.processor import PipelineProcessor
 from usagi_agent.pipelines.rules.stage import PipelineStagePatch
@@ -20,23 +24,38 @@ StageProcess = Callable[[AgentRunState, RunContext], Awaitable[PipelineStagePatc
 
 def _wrap_stage(
     process: StageProcess,
-    runtime: "ServerRuntime",
+    runtime: ServerRuntime,
     *,
     budget,
+    stage_name: str,
+    scenario_key: str,
 ) -> Callable[..., Awaitable[dict]]:
     async def node(state: AgentRunState, config: RunnableConfig) -> dict:
         context = RunContext.from_graph_config(config)
         configurable = config.get("configurable", {})
-        components = runtime.kernel_components
-        if components is not None:
-            await components.middleware.before_node(
-                context.run_id,
-                context.tenant_id,
-                configurable.get("fencing_gate"),
-                context.deadline,
-                budget,
+        with operation(
+            runtime.observability,
+            "pipeline.stage",
+            **{
+                "usagi.pipeline.stage.name": stage_name,
+                "usagi.scenario.name": scenario_key,
+            },
+        ) as telemetry:
+            components = runtime.kernel_components
+            if components is not None:
+                await components.middleware.before_node(
+                    context.run_id,
+                    context.tenant_id,
+                    configurable.get("fencing_gate"),
+                    context.deadline,
+                    budget,
+                )
+            result = await process(state, context)
+            disposition = (
+                result.get("pass_disposition") if isinstance(result, dict) else None
             )
-        result = await process(state, context)
+            if disposition == "run_failed":
+                telemetry.set_outcome("failed")
         if not isinstance(result, dict):
             raise TypeError("pipeline stage must return dict")
         return dict(result)
@@ -51,7 +70,7 @@ class PipelineCompiler:
     def compile(
         self,
         scenario: ScenarioConfig,
-        runtime: "ServerRuntime",
+        runtime: ServerRuntime,
         *,
         checkpointer=None,
     ) -> Any:
@@ -69,9 +88,18 @@ class PipelineCompiler:
         for name, method in stages:
             # Tool-call budget enforcement lives inside the ResultProcess
             # stage (after action formation, before execution).
-            graph.add_node(name, _wrap_stage(method, runtime, budget=pipeline.budget))
+            graph.add_node(
+                name,
+                _wrap_stage(
+                    method,
+                    runtime,
+                    budget=pipeline.budget,
+                    stage_name=name,
+                    scenario_key=scenario.key,
+                ),
+            )
         graph.add_edge(START, stages[0][0])
-        for (source, _), (target, _) in zip(stages, stages[1:]):
+        for (source, _), (target, _) in pairwise(stages):
             graph.add_edge(source, target)
 
         async def next_pass(state: AgentRunState) -> str:
@@ -82,6 +110,8 @@ class PipelineCompiler:
                 return "pre_recall"
             return END
 
-        graph.add_conditional_edges("end", next_pass, {"pre_recall": "pre_recall", END: END})
+        graph.add_conditional_edges(
+            "end", next_pass, {"pre_recall": "pre_recall", END: END}
+        )
         kwargs = {"checkpointer": checkpointer} if checkpointer is not None else {}
         return graph.compile(**kwargs)

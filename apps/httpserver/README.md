@@ -31,6 +31,10 @@ MCP 在单独终端/服务运行；随后在仓库根目录启动：
 python -m usagi_httpserver --config apps/httpserver/config.json
 ```
 
+### 本地查看 OpenTelemetry
+
+示例配置默认使用 `otel_exporter: "console"`，不需要安装 Collector 或 Grafana。Trace 在对应操作完成后直接输出到启动终端，Metric 按 `otel_metric_export_interval_millis` 周期输出。需要关闭时将 `otel_exporter` 改为 `"none"`；改为 `"otlp"` 并配置 `otel_endpoint` 则可发送到外部 Collector。详细字段和指标清单见 [OpenTelemetry 监控](../../docs/open-telemetry.md)。
+
 仅测试聊天可将 `xhs_url` 设为 `null`。HTTP 默认本机 8080，Node 默认 8090，MCP 默认 3000。Windows 跨机器访问使用 TLS 反向代理或受信任隧道；Node 和 MCP 保持内网。MCP 与 HTTP 必须共享 media 绝对路径和读取权限；容器部署时挂载同一目录。浏览器登录需部署账号实际完成。
 
 `model_profile` 默认为 `chat`（GLM 普通 API）。使用项目已有的 Coding Plan 资源时设为 `coding_plan`，走 Responses 接口；两者均读取 `GLM_API_KEY`。普通 API 返回余额不足不代表 Coding Plan 资源不可用。

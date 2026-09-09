@@ -38,7 +38,10 @@ class ModelProcessor(StageProcessor):
         )
         stage_patch: ModelStagePatch = {}
         for config in self.rules:
-            result = await config.model(rule_input, self.runtime, context)
+            result = await self.run_rule(
+                "model", config.name,
+                config.model(rule_input, self.runtime, context),
+            )
             if isinstance(result, RuleExecutionError):
                 self.raise_on_error(result, config.name)
             if result is None:
