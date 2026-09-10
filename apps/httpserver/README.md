@@ -1,6 +1,6 @@
 # USAGI HTTP Server
 
-应用组合入口：注册 Agent 与小红书 MCP，接收两端微信输入，执行持久化任务，收集工具审批并投递结果。完整架构见 [接入说明](../../docs/application-integration.md)。
+应用组合入口：注册 Agent 与小红书 MCP，接收两端微信输入，执行持久化任务并投递结果。完整架构见 [接入说明](../../docs/application-integration.md)。
 
 ## 安装与启动
 
@@ -41,7 +41,9 @@ python -m usagi_httpserver --config apps/httpserver/config.json
 `DEEPSEEK_API_KEY`。使用项目已有的 GLM Coding Plan 资源时设为
 `coding_plan`，走 Responses 接口并读取 `GLM_API_KEY`。
 
-`tool_specs.py` 是审批配置入口。所有工具默认需要审批，包括查询；只想发布工具审批时，显式将所需查询工具设为 `requires_approval=False`。变更后重启以重新注册。
+`tool_specs.py` 是工具治理配置入口。所有工具默认需要框架审批，包括 `xhs_publish_content`。变更后重启以重新注册。
+
+wxauto 素材进入三态候选池。收到新素材后，只有连续 10 秒没有更新且未消费窗口中至少有一张图片时，HTTP Server 才将窗口标记为 `selected`，并使用独立会话直接调用通用 `research_writer` 场景。第一轮 Agent 只判断素材、生成完整帖子并询问是否发布，不调用发布工具；用户引用该消息回复后会进入同一个 Session，Agent 再判断是否发起 `xhs_publish_content`。工具调用还需要 Runtime 的第二次审批，通过后才真正发布。发布成功转为 `consumed`，素材不足、用户未同意或工具审批被拒绝转回 `unconsumed`；退回后没有新消息不会重复调用 Agent，必须收到新消息并再次静默 10 秒。外部发布结果 unknown 时保持 `selected` 等待人工核验。
 
 ## API
 
@@ -62,6 +64,6 @@ python -m usagi_httpserver --config apps/httpserver/config.json
 | GET /v1/adapters/status | 本人绑定渠道最近心跳 |
 | POST /v1/conversations/{conversation_ref}/clear-gap | 人工核对后丢弃不完整的待处理素材范围 |
 
-会话和审批均由 USAGI Runtime 处理；HTTP 层只根据 uid 或引用消息的 message_id 解析 session_id 并透传消息。待审批会话只接受 Yes/No（不区分大小写），其他内容由 Runtime 再次返回审批提示。HTTP 超时后先查询原 task/run，使用原幂等键重试消息请求，不换新键重新发布。
+会话和工具审批均由 USAGI Runtime 处理；HTTP 层根据 uid 或引用消息的 message_id 解析 session_id 并透传消息。小红书草稿确认是普通的连续 Agent 对话，用户可以同意、拒绝或提出修改；Agent 决定调用发布工具后，Runtime 再进行独立的工具审批。HTTP 超时后先查询原 task/run，使用原幂等键重试消息请求，不换新键重新发布。
 
 部署模板见 [systemd](../../deploy/systemd/usagi-http.service)。只启动一个进程，不使用 uvicorn 多 worker。数据目录只授权服务账号读取。

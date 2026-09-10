@@ -6,8 +6,8 @@
 flowchart LR
   W[Windows wxauto 素材采集] -->|HTTP 文本与图片| H[Python HTTP Server]
   U[用户微信] <--> N[Node 微信 Adapter]
-  N -->|HTTP 输入与审批回复| H
-  H -->|HTTP 通知与审批预览| N
+  N -->|HTTP 输入与用户回复| H
+  H -->|HTTP 通知与帖子草稿| N
   H --> A[USAGI Agent / LangGraph]
   A --> T[ToolManager 审批门控]
   T --> M[小红书 MCP]
@@ -22,7 +22,7 @@ flowchart LR
 | `apps/httpserver/usagi_httpserver/tool_specs.py` | 应用已启用工具的审批配置；MCP 参数 schema 来自工具发现 |
 | `apps/httpserver/usagi_httpserver/ingress.py` | 身份绑定、消息、媒体、任务与通知查询 |
 | `apps/httpserver/usagi_httpserver/store.py` | SQLite inbox、素材快照、任务、outbox |
-| `apps/httpserver/usagi_httpserver/service.py` | 创作请求、审批命令、恢复与渠道路由 |
+| `apps/httpserver/usagi_httpserver/service.py` | 交互消息、连续会话与渠道路由 |
 | `apps/weixin-adapter` | 扫码、长轮询、CDN 图片、投递、游标和发送记录 |
 | `apps/wechat-edge` | Windows 交互桌面内轮询允许的聊天，下载图片并断网补传 |
 | `apps/xhs-autopost` | 保留 MCP 调试 CLI 和兼容层；线上由 HTTP Server 注册 MCP |
@@ -30,7 +30,7 @@ flowchart LR
 
 ## 两类输入
 
-Windows 消息始终作为素材。服务按用户与会话归集，默认静默 90 秒或累计 900 秒后冻结当前范围；快照与任务在同一事务中创建，后续消息进入下一份快照。Agent 判断素材是否足以形成笔记，不足时说明原因，足够时创作并通过发布工具请求审批。语义判断由模型完成，窗口划分和去重由代码保证。
+Windows 普通消息作为素材。HTTP Server 将素材保存在三态候选池中：`unconsumed`（未消费）、`selected`（已选中）和 `consumed`（已消费）。同一会话收到新素材后连续静默 10 秒，且当前未消费窗口至少包含一张图片时，服务原子选中整个窗口，并用独立会话直接调用通用 `research_writer` 场景，不创建素材任务队列；后续窗口从剩余未消费素材开始。第一轮 Agent 判断素材是否足以形成笔记：不足则退回候选池，足够则生成完整帖子、直接把结果发给用户并询问是否发布，此时不调用工具。用户引用草稿回复时，消息进入同一个 Session，由 Agent 判断是否发起 `xhs_publish_content`；工具调用随后由 Runtime 发起第二次审批，审批通过后才执行。发布成功后消费窗口；用户拒绝、工具审批拒绝或确定未发布时退回，但没有新消息时不会重复判断，必须等新消息移动窗口右边界并再次静默 10 秒。发布结果为 unknown 时保持选中等待人工核验。
 
 用户与 Agent 的微信对话作为交互输入。文字触发一次任务；先发的图片暂存，后发的任务文字（如“开始生成”）携带这些图片。每个文字消息独立处理；审批命令不会吃掉待创作的图片。同一用户同一会话使用稳定的框架会话键，不同会话保持独立。
 
@@ -40,6 +40,7 @@ Windows 消息始终作为素材。服务按用户与会话归集，默认静默
 
 1. `ToolSpec.requires_approval` 默认 `True`，普通工具和 MCP 一致；它是服务端配置，不进入模型参数。
 2. ToolManager 先验证权限与参数，再检查审批。免审必须在创建工具时显式设置 `False`。
+   小红书发布先由 Agent 确认草稿；Agent 决定发起 `xhs_publish_content` 后，仍须经过这里的独立工具审批。
 3. 需要审批时保存工具名和完整参数 Artifact，并抛出通用审批请求；Pipeline 调用 LangGraph `interrupt()`，保存 checkpoint。
 4. HTTP 应用读取暂停结果，将工具名、参数、审批编号和可用图片预览写入 outbox；渠道由应用配置决定。
 5. 用户发送 `批准 <编号>` 或 `拒绝 <编号>`。应用核对本人待审批任务，取得版本与参数摘要，在服务端签发恢复令牌后调用 `Server.resume()`。
@@ -52,7 +53,7 @@ Windows 消息始终作为素材。服务按用户与会话归集，默认静默
 ## 持久化与故障处理
 
 - Node 在同一事务保存上游批次、游标和 inbox，Python 接受后才确认本地输入。重传使用相同事件 ID；HTTP 同 ID 同内容返回原收据，内容冲突返回 409。
-- Windows 持久化观察锚点与待上传消息。锚点丢失或匹配歧义产生 gap，服务停止该会话自动成稿。人工核对后清理服务端不完整范围，并在 Windows `--rebaseline` 建立新基线。
+- Windows 观察锚点与待上传消息只保存在进程内存。锚点丢失或匹配歧义产生 gap；HTTP Server 将最后一个 gap 作为窗口左边界，隔离断点及其之前的不确定素材，但允许后续连续观察到的新素材形成新的窗口。需要恢复断点以前的范围时必须人工核对，不能将两侧素材自动拼接。
 - Runtime 的审批、输入快照、去重、执行记录、Artifact、checkpoint 均落盘。固定 `USAGI_RESUME_KEY` 后，待审批任务可跨进程重启恢复；测试覆盖真实 LangGraph 暂停与继续。
 - 工具执行前持久化执行记录。外部写操作超时、执行中进程退出、微信投递停在 sending 时，保留结果未知状态，不盲目重发。checkpoint 无法保证外部服务恰好执行一次。
 - outbox 失败可重试同一 delivery ID；Node 接受后由 Python 查询状态。结果未知、上下文不可用、无路由等状态可从通知 API 查看，需核对微信/小红书真实结果后处理。

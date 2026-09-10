@@ -3,14 +3,90 @@ import argparse
 import hashlib
 import importlib
 import json
+import logging
 import mimetypes
 import os
 import threading
-import time
 from pathlib import Path
 
 import httpx
+
 from .spool import Spool
+
+log = logging.getLogger("wechat_edge")
+
+
+def _runs(values,minimum):
+    runs=[]
+    start=None
+    for index,value in enumerate(values):
+        if value>=minimum and start is None:
+            start=index
+        elif value<minimum and start is not None:
+            runs.append((start,index))
+            start=None
+    if start is not None:
+        runs.append((start,len(values)))
+    return runs
+
+
+def _crop_message_image(image):
+    """Remove the chat row background and avatar from a wxauto4 screenshot."""
+    from PIL import Image,ImageChops,ImageFilter
+
+    rgb=image.convert('RGB')
+    width,height=rgb.size
+    corners=[rgb.getpixel((0,0)),rgb.getpixel((width-1,0)),
+             rgb.getpixel((0,height-1)),rgb.getpixel((width-1,height-1))]
+    background=tuple(int(sum(pixel[channel] for pixel in corners)/len(corners))
+                     for channel in range(3))
+    solid=Image.new('RGB',rgb.size,background)
+    difference=ImageChops.difference(rgb,solid).convert('L').point(
+        lambda value:255 if value>18 else 0
+    ).filter(ImageFilter.MaxFilter(3))
+    columns=[sum(1 for y in range(height) if difference.getpixel((x,y)))
+             for x in range(width)]
+    column_runs=_runs(columns,max(3,height//80))
+    if not column_runs:
+        raise RuntimeError('image region unavailable')
+    left,right=max(column_runs,key=lambda run:(run[1]-run[0])*sum(columns[run[0]:run[1]]))
+    rows=[sum(1 for x in range(left,right) if difference.getpixel((x,y)))
+          for y in range(height)]
+    row_runs=_runs(rows,max(3,(right-left)//80))
+    if not row_runs:
+        raise RuntimeError('image region unavailable')
+    top,bottom=max(row_runs,key=lambda run:(run[1]-run[0])*sum(rows[run[0]:run[1]]))
+    padding=2
+    box=(max(0,left-padding),max(0,top-padding),
+         min(width,right+padding),min(height,bottom+padding))
+    cropped=rgb.crop(box)
+    if cropped.width<32 or cropped.height<32:
+        raise RuntimeError('image region too small')
+    return cropped
+
+
+def _capture_wxauto4_image(message,target):
+    """Capture a WeChat 4.x image without relying on its unstable viewer UI."""
+    from PIL import ImageGrab
+
+    message.roll_into_view()
+    rectangle=message.control.BoundingRectangle
+    box=(int(rectangle.left),int(rectangle.top),
+         int(rectangle.right),int(rectangle.bottom))
+    if box[2]<=box[0] or box[3]<=box[1]:
+        raise RuntimeError('invalid image message bounds')
+    screenshot=ImageGrab.grab(bbox=box,all_screens=True)
+    _crop_message_image(screenshot).save(target,format='PNG')
+    return target
+
+
+def configure_logging():
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    log.handlers.clear()
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+    log.propagate = False
 
 
 def upload_loop(spool,config,stop):
@@ -29,6 +105,7 @@ def upload_loop(spool,config,stop):
                         body['content_parts'].append({'type':'image','media_id':result.json()['media_id']})
                     response=client.post('/v1/ingress/events',json=body);response.raise_for_status()
                     spool.ack(event_id)
+                    log.info("发送了消息")
                 except (httpx.HTTPError,OSError):
                     break
             try:
@@ -43,12 +120,13 @@ def main():
     parser.add_argument('--config',required=True)
     parser.add_argument('--rebaseline',action='store_true',help='Discard local observation anchor; separately clear any server gap after review')
     args=parser.parse_args()
+    configure_logging()
     config=json.loads(Path(args.config).read_text(encoding='utf-8'))
     if os.name!='nt':raise RuntimeError('live wxauto collection requires Windows')
     if not config.get('conversations'):raise ValueError('explicit conversation allowlist required')
     root=Path(config.get('data_dir','.usagi-edge')).resolve();root.mkdir(parents=True,exist_ok=True)
     (root/'images').mkdir(exist_ok=True)
-    spool=Spool(root/'edge.db')
+    spool=Spool()
     module=config.get('wxauto_module','wxauto')
     if module not in ('wxauto','wxauto4','wxautox4'):raise ValueError('unsupported wxauto module')
     factory=importlib.import_module(module).WeChat
@@ -79,17 +157,24 @@ def main():
                                 'direction':'outgoing' if outgoing else 'incoming','text':text}
                         record['signature']=hashlib.sha256(json.dumps([sender,kind,text,str(getattr(msg,'time',''))],ensure_ascii=False).encode()).hexdigest()
                         if kind=='image':
-                            # Download while the UI message object is still valid.
-                            download=getattr(msg,'download',None)
-                            if download is None:raise RuntimeError('this wxauto version has no image download API')
-                            file=download(dir_path=str(root/'images'))
+                            if module=='wxauto4':
+                                file=_capture_wxauto4_image(
+                                    msg,root/'images'/(record['signature']+'.png')
+                                )
+                            else:
+                                # Download while the UI message object is still valid.
+                                download=getattr(msg,'download',None)
+                                if download is None:raise RuntimeError('this wxauto version has no image download API')
+                                file=download(dir_path=str(root/'images'))
                             if not isinstance(file,(str,Path)) or not Path(file).is_file():raise RuntimeError('image unavailable')
                             data=Path(file).read_bytes()
                             immutable=root/'images'/(hashlib.sha256(data).hexdigest()+Path(file).suffix)
                             if not immutable.exists():immutable.write_bytes(data)
                             record['image_path']=str(immutable)
                         observed.append(record)
-                    spool.capture(config,conversation,observed,rebaseline=baseline)
+                    captured=spool.capture(config,conversation,observed,rebaseline=baseline)
+                    for _ in range(captured):
+                        log.info("抓到了消息")
                     config['_status']='observing'
                 except Exception as exc:
                     config['_status']='unavailable:'+type(exc).__name__

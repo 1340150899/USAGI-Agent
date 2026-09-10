@@ -45,6 +45,21 @@ if(legacyAccount && !Object.keys(accounts).length) {
 configureAccounts(accounts);
 const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 
+function safeDeliveryError(error:unknown) {
+  const value=error as {name?:unknown;code?:unknown;cause?:{code?:unknown}};
+  const message=error instanceof Error?error.message:String(error??'');
+  const httpStatus=message.match(/\b(?:sendMessage\s+)?([45]\d\d)\b/)?.[1];
+  const upstreamRet=message.match(/\bret=(-?\d+)\b/)?.[1];
+  return {
+    name:typeof value?.name==='string'?value.name:'UnknownError',
+    ...(typeof value?.code==='string'?{code:value.code}:{}),
+    ...(typeof value?.cause?.code==='string'?{cause_code:value.cause.code}:{}),
+    ...(httpStatus?{http_status:Number(httpStatus)}:{}),
+    ...(upstreamRet?{upstream_ret:Number(upstreamRet)}:{}),
+    timeout:/timeout|aborted/i.test(message),
+  };
+}
+
 if(process.argv.includes('login')) {
   const start=await startWeixinLoginWithQr({apiBaseUrl:baseUrl});
   if(!start.qrcodeUrl)throw new Error(start.message);
@@ -145,40 +160,63 @@ async function sendDelivery(deliveryId:string,payload:any) {
   if(store.claim(deliveryId)) {
       const targets=payload.broadcast?store.routes().map(item=>({routeRef:item.routeRef,route:item})):
         [{routeRef:payload.reply_route_ref,route:store.get('route:'+payload.reply_route_ref)}];
-      if(!Object.keys(accounts).length || !targets.length || targets.some(item=>!item.route?.contextToken))store.status(deliveryId,'failed');
+      if(!Object.keys(accounts).length || !targets.length)store.status(deliveryId,'failed');
       else {
-      try {
-        for(const target of targets) {
+      let successfulOperations=0;
+      let successfulTargets=0;
+      let failedTargets=0;
+      for(const [targetIndex,target] of targets.entries()) {
+        let phase='resolve_account';
+        try {
+          if(!target.route?.contextToken)throw new Error('route context unavailable');
           const routeAccount=accounts[target.route.accountId] ?? Object.values(accounts)[0];
           if(!routeAccount)throw new Error('route account unavailable');
           const opts={baseUrl:routeAccount.baseUrl,token:routeAccount.token,contextToken:target.route.contextToken};
           const chars=Array.from(payload.text??'') as string[];
           let fragmentIndex=0;
           for(let i=0;i<chars.length;i+=2000) {
+            phase='send_text';
             const clientId=generateClientId();
             store.sent(deliveryId,{recipient_ref:target.routeRef,fragment_index:fragmentIndex,client_id:clientId});
             const result=await sendMessageWeixin({to:target.route.to,text:chars.slice(i,i+2000).join(''),opts,clientId});
             store.sent(deliveryId,{recipient_ref:target.routeRef,fragment_index:fragmentIndex,
               client_id:result.clientId,message_id:result.messageId});
+            successfulOperations++;
             fragmentIndex++;
           }
           if(payload.media_id) {
+            phase='download_media';
             const response=await api('/v1/media/'+encodeURIComponent(payload.media_id));
             const bytes=Buffer.from(await response.arrayBuffer());
             const mime=imageMime(bytes);
             const filePath=path.join(root,digest(deliveryId+target.routeRef)+({'image/jpeg':'.jpg','image/png':'.png','image/webp':'.webp','image/gif':'.gif'}[mime]));
             fs.writeFileSync(filePath,bytes,{mode:0o600});
             try {
+              phase='send_media';
               const mediaResult=await sendWeixinMediaFile({filePath,to:target.route.to,text:'',opts,cdnBaseUrl});
               for(const message of mediaResult.messages) {
                 store.sent(deliveryId,{recipient_ref:target.routeRef,fragment_index:fragmentIndex++,
                   client_id:message.clientId,message_id:message.messageId});
+                successfulOperations++;
               }
             } finally {try{fs.unlinkSync(filePath);}catch{}}
           }
+          successfulTargets++;
+        } catch(error) {
+          failedTargets++;
+          console.error(JSON.stringify({timestamp:new Date().toISOString(),level:'error',
+            event:'delivery_target_unknown',delivery_id:deliveryId,target_index:targetIndex,
+            phase,error:safeDeliveryError(error)}));
         }
-        store.status(deliveryId,'sent');
-      } catch {store.status(deliveryId,'unknown');}
+      }
+      const status=failedTargets===0?'sent':
+        successfulTargets>0 || successfulOperations>0?'partial':'unknown';
+      if(failedTargets>0) {
+        console.error(JSON.stringify({timestamp:new Date().toISOString(),level:'error',
+          event:'delivery_incomplete',delivery_id:deliveryId,status,
+          target_count:targets.length,successful_targets:successfulTargets,failed_targets:failedTargets}));
+      }
+      store.status(deliveryId,status);
       }
   }
   while(alive) {

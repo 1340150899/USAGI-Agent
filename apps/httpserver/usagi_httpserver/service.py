@@ -38,7 +38,7 @@ class ApplicationService:
         self.store.recover()
         while not self.stopping.is_set():
             self.store.collect(
-                silence=self.settings.get("silence_seconds", 90),
+                silence=self.settings.get("silence_seconds", 10),
                 maximum=self.settings.get("maximum_seconds", 900),
             )
             job = self.store.claim()
@@ -119,6 +119,7 @@ class ApplicationService:
             result = await self.server.create_session(request, auth=auth)
             session_id = result.session_id
         self.store.bind_session(uid, session_id)
+        self.store.record_session_run(session_id, result.run_id)
         status = "unknown" if result.outcome.kind in ("running", "resuming") else result.outcome.kind
         self.store.finish(job["id"], status, result.run_id, result.outcome.model_dump(mode="json"))
         self.store.notify(job["id"] + ":message", job["principal"], {

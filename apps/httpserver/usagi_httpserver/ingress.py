@@ -149,6 +149,6 @@ def install_ingress(app, service, authenticate):
     async def clear_gap(conversation_ref: str,auth=Depends(authenticate)):
         # Explicit operator reconciliation discards the incomplete pending range.
         with store.db() as db:
-            db.execute("UPDATE events SET consumed=1 WHERE principal=? AND conversation=? AND mode='material' AND consumed=0",
+            db.execute("UPDATE events SET consumed=1,status='consumed',selection_id=NULL WHERE principal=? AND conversation=? AND mode='material' AND status='unconsumed'",
                        (auth.principal.principal_opaque_id,conversation_ref))
         return {'cleared':True,'discarded_pending_range':True}

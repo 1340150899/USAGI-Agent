@@ -132,6 +132,12 @@ class InMemoryToolExecutionStore:
         async with self._lock:
             return self._by_id.get(execution_id)
 
+    async def list_by_run(self, run_id: str) -> tuple[ToolExecutionRecord, ...]:
+        async with self._lock:
+            return tuple(
+                record for record in self._by_id.values() if record.run_id == run_id
+            )
+
     async def cas_execution_status(
         self, execution_id: str, *, expected: ExecutionStatus, new: ExecutionStatus,
     ) -> ToolExecutionRecord:

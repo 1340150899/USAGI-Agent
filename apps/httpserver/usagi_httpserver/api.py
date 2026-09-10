@@ -35,7 +35,15 @@ def create_app(server, *, credentials: dict[str, str], scenario_key: str,
     async def lifespan(app):
         tasks=[]
         if service:
-            tasks=[asyncio.create_task(service.run())]
+            from .wechat_worker import WeChatMaterialWorker
+
+            wechat_worker = WeChatMaterialWorker(
+                server, service.store, service.settings, stopping=service.stopping
+            )
+            tasks=[
+                asyncio.create_task(service.run()),
+                asyncio.create_task(wechat_worker.run()),
+            ]
             if service.settings.get('weixin_adapter'):
                 tasks.append(asyncio.create_task(service.deliver()))
         app.state.worker_tasks=tasks
