@@ -8,9 +8,9 @@ from usagi_agent.pipelines import ScenarioPipelineInitializer
 from usagi_agent.pipelines.config.stage_config import SCENARIO_CONFIGS
 from usagi_agent.registry import BootstrapSettings
 from usagi_agent.server import Server, ServiceRuntimeInitializer
-from usagi_agent.tools import MCPServerConfig
 
-from .tool_specs import PYTHON_TOOL_SPECS, XHS_TOOL_SPECS
+from .tool_specs import PYTHON_TOOL_SPECS
+from .xhs_mcp import build_xhs_mcp_config
 
 
 def _bootstrap_settings(settings: dict, data: Path, key: str) -> BootstrapSettings:
@@ -55,15 +55,7 @@ async def build_server(*, xhs_url: str | None = None, settings=None):
     try:
         if xhs_url:
             await runtime.tool_manager.register_mcp(
-                MCPServerConfig(
-                    name="xhs",
-                    name_prefix="",
-                    transport="streamable_http",
-                    url=xhs_url,
-                    enabled_tools=tuple(XHS_TOOL_SPECS),
-                    spec_overrides=XHS_TOOL_SPECS,
-                    read_timeout_seconds=300,
-                )
+                build_xhs_mcp_config(allow_writes=True, url=xhs_url)
             )
         runtime.agent_manager.create_agent(
             id="research_writer",

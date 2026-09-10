@@ -8,10 +8,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "xhs-autopost"))
+sys.path.insert(0, str(ROOT / "apps" / "httpserver"))
 sys.path.insert(0, str(ROOT / "usagi-agent" / "src"))
 
-from xhs_autopost.mcp import build_xhs_mcp_config
+from usagi_httpserver.xhs_mcp import build_xhs_mcp_config
+
 from usagi_agent.policies.engine import DefaultPolicyEngine
 from usagi_agent.ports.context import GovernedExecutionContext, ToolContext
 from usagi_agent.tools import ToolManager
@@ -32,10 +33,7 @@ def unpack(observation):
 
 
 async def run(args):
-    config = build_xhs_mcp_config(allow_writes=args.publish, cwd=ROOT)
-    if args.mcp_entry:
-        entry = Path(args.mcp_entry).resolve(strict=True)
-        config = config.model_copy(update={"command": "node", "args": (str(entry), "mcp")})
+    config = build_xhs_mcp_config(allow_writes=args.publish, url=args.mcp_url)
     manager = ToolManager()
     context = ToolContext(execution=GovernedExecutionContext(
         tenant_id="xhs-live-test",
@@ -63,14 +61,16 @@ async def run(args):
     try:
         adapters = await manager.register_mcp(config)
         print(json.dumps({"connected": True, "tools": [a.spec.name for a in adapters]}, ensure_ascii=False), flush=True)
-        auth = await call("xhs_auth_status", {})
-        if not isinstance(auth, dict) or auth.get("loggedIn") is not True:
+        auth = await call("xhs_check_login_status", {})
+        auth_text = json.dumps(auth, ensure_ascii=False)
+        if "已登录" not in auth_text or "未登录" in auth_text:
             raise RuntimeError("XHS login was not confirmed")
         if not args.publish:
             return
         media = Path(args.image).resolve(strict=True)
-        arguments = {"type": "image", "title": args.title, "content": args.content,
-                     "media_paths": [str(media)], "tags": args.tags}
+        tags = [tag.strip() for tag in args.tags.split(",") if tag.strip()]
+        arguments = {"title": args.title, "content": args.content,
+                     "images": [str(media)], "tags": tags}
         report = Path(args.report).resolve()
         report.parent.mkdir(parents=True, exist_ok=True)
         record = {"state": "started", "arguments": arguments}
@@ -85,7 +85,7 @@ async def run(args):
             raise
         finally:
             report.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-        record["notes_after_publish"] = await call("xhs_get_user_notes", {"limit": 5})
+        record["feeds_after_publish"] = await call("xhs_list_feeds", {})
         report.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"REPORT {report}", flush=True)
     finally:
@@ -94,7 +94,7 @@ async def run(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mcp-entry", help="Installed xhs-mcp.cjs path; avoids npm downloads.")
+    parser.add_argument("--mcp-url", default="http://127.0.0.1:18060/mcp")
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--image")
     parser.add_argument("--title")

@@ -3900,7 +3900,7 @@ Application
 | 生成帖子 | ModelRule | Post Writer AgentSpec |
 | 多维审核 | AgentCoordinator Parallel/Review | Review Team |
 | 微信通知人工审核 | HumanGate + Notification Tool | WeChat Review Adapter |
-| 发布小红书 | Fixed ToolNode | social-auto-upload Adapter |
+| 发布小红书 | Fixed ToolNode | 内置 Xiaohongshu MCP Adapter |
 | 发布后通知对方 | ToolNode | WeChat Notification Adapter |
 | 学习偏好 | MemoryWriter/Promotion | Preference Memory Policy |
 
@@ -3948,10 +3948,10 @@ USAGI-Agent/
 ├─ plugins/
 │  ├─ openai-compatible/
 │  ├─ postgres/
-│  ├─ wxauto/
-│  └─ social-auto-upload/
+│  └─ wxauto/
 ├─ apps/
-│  └─ xhs-autopost/
+│  ├─ httpserver/
+│  └─ xiaohongshu-mcp/
 ├─ examples/
 │  ├─ structured-agent/
 │  ├─ react-tool-loop/
@@ -4047,7 +4047,7 @@ USAGI-Agent/
 
 A1 preview 依赖 M0B；synthetic external integration 依赖 M0B+M1 及签名测试账号/限额/cleanup attestation；真实人工监听/发布再依赖 M2 与应用 Phase 2B/2C Erasure Gate；真实自动发布还依赖 Phase 3。integration attestation 不能升级或复用于 real，未完成真实 Gate 时不能监听真实私人聊天。
 
-- wxauto 和 social-auto-upload Plugin。
+- wxauto Plugin 和内置 Xiaohongshu MCP 服务。
 - 小红书业务 Workflow 和 AgentSpec。
 - 小红书审核需要的固定 Parallel Review。
 - 所有测试期发布人工审核。

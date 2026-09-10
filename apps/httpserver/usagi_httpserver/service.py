@@ -13,6 +13,8 @@ from usagi_agent.types.refs import PrincipalRef, ArtifactOwner
 from usagi_agent.types.content import ImageContentPart
 from usagi_agent.types.run import RunStartRequest
 
+from .draft_images import selected_image_indices
+
 log = logging.getLogger(__name__)
 
 
@@ -85,7 +87,7 @@ class ApplicationService:
                 existing = await self.server.runtime.session_manager.get_for_uid(uid)
                 session_id = existing.id if existing else None
 
-        image_parts, paths = [], []
+        image_parts, paths, media_ids = [], [], []
         for part in body.get("content_parts", []):
             if part["type"] != "image":
                 continue
@@ -106,6 +108,7 @@ class ApplicationService:
             )
             image_parts.append(ImageContentPart(media_type=media["mime"], artifact_ref=ref))
             paths.append(media["path"])
+            media_ids.append(media["id"])
 
         request = RunStartRequest(
             scenario_key=self.scenario, request_idempotency_key=job["id"],
@@ -119,13 +122,34 @@ class ApplicationService:
             result = await self.server.create_session(request, auth=auth)
             session_id = result.session_id
         self.store.bind_session(uid, session_id)
+        self.store.record_session_media(session_id, media_ids)
         self.store.record_session_run(session_id, result.run_id)
         status = "unknown" if result.outcome.kind in ("running", "resuming") else result.outcome.kind
         self.store.finish(job["id"], status, result.run_id, result.outcome.model_dump(mode="json"))
-        self.store.notify(job["id"] + ":message", job["principal"], {
+        payload = {
             "reply_route_ref": route, "text": result.message,
             "session_id": result.session_id, "broadcast": uid == super_uid,
-        })
+        }
+        reply_media_ids = self._reply_media_ids(session_id, result)
+        if reply_media_ids:
+            payload["media_ids"] = reply_media_ids
+        self.store.notify(job["id"] + ":message", job["principal"], payload)
+
+    def _reply_media_ids(self, session_id, result):
+        """Attach images to an interactive reply only when the draft says so.
+
+        Unlike the first material broadcast there is no all-images fallback:
+        a conversation turn without a 配图 marker is a plain answer.
+        """
+        if result.outcome.kind != "completed":
+            return []
+        media_ids = self.store.session_media_ids(session_id)
+        if not media_ids:
+            return []
+        indices = selected_image_indices(result.message, total=len(media_ids))
+        if not indices:
+            return []
+        return [media_ids[index - 1] for index in indices]
 
     async def deliver(self):
         adapter = self.settings.get("weixin_adapter")

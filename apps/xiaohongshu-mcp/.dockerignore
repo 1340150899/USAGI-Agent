@@ -1,0 +1,15 @@
+.git
+.idea
+.vscode
+.cursor
+.github
+**/*.log
+bin
+dist
+vendor
+Dockerfile
+docker-compose.yml
+docker
+.DS_Store
+
+cookies.json

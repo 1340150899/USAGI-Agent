@@ -2,7 +2,7 @@
 
 先按照各应用 README 安装依赖、生成私有配置并完成账号登录，再使用模板。模板不会自动创建服务账号、填入密钥或操作真实微信。
 
-Linux 模板假定代码位于 `/opt/usagi`，服务用户为 `usagi`，Python 环境为 `/opt/usagi/.venv`，Node/npm 安装在 `/usr/bin`。按实际安装路径修改。HTTP 与 MCP 使用同一用户和媒体目录；浏览器按 xhs-mcp 要求先启动并登录，无图形桌面时需先配置可用的浏览器运行环境。
+Linux 模板假定代码位于 `/opt/usagi`，服务用户为 `usagi`，Python 环境为 `/opt/usagi/.venv`。按实际安装路径修改。先在 `apps/xiaohongshu-mcp` 编译 Go 服务，并以同一用户完成浏览器登录。HTTP 与 MCP 使用同一用户和媒体目录；内置 MCP 禁止无头模式，因此部署主机必须提供可用的图形桌面会话。
 
 将环境变量放到 `/etc/usagi/application.env`，文件只允许服务用户或 root 读取，内容格式：
 

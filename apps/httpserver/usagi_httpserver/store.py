@@ -37,6 +37,9 @@ class AppStore:
                   next_attempt REAL DEFAULT 0, attempts INTEGER DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS media (
                   id TEXT PRIMARY KEY, principal TEXT, path TEXT, mime TEXT, sha256 TEXT);
+                CREATE TABLE IF NOT EXISTS session_media (
+                  session_id TEXT, position INTEGER, media_id TEXT, created REAL,
+                  PRIMARY KEY(session_id,position));
                 CREATE TABLE IF NOT EXISTS heartbeat (
                   source TEXT PRIMARY KEY, payload TEXT, seen REAL);
                 CREATE TABLE IF NOT EXISTS session_routes (
@@ -342,6 +345,36 @@ class AppStore:
         with self.db() as db:
             row = db.execute('SELECT * FROM media WHERE id=? AND principal=?', (media_id, principal)).fetchone()
         return dict(row) if row else None
+
+    def record_session_media(self, session_id, media_ids):
+        """Append session images in the order the model sees them.
+
+        The same media may legitimately occupy two positions when a window
+        contains a duplicated upload, so no uniqueness beyond the position.
+        Replaying an identical tail is a no-op to keep numbering stable
+        across job retries.
+        """
+        if not media_ids:
+            return
+        now = time.time()
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            existing = [row['media_id'] for row in db.execute(
+                'SELECT media_id FROM session_media WHERE session_id=? ORDER BY position',
+                (session_id,)).fetchall()]
+            if media_ids == existing[-len(media_ids):]:
+                return
+            position = len(existing)
+            for media_id in media_ids:
+                db.execute('INSERT INTO session_media VALUES (?,?,?,?)',
+                           (session_id, position, media_id, now))
+                position += 1
+
+    def session_media_ids(self, session_id):
+        with self.db() as db:
+            rows = db.execute('SELECT media_id FROM session_media WHERE session_id=? ORDER BY position',
+                              (session_id,)).fetchall()
+        return [row['media_id'] for row in rows]
 
     def collect(self, *, silence=10, maximum=900):
         """Create legacy API/interactive jobs; material windows bypass this queue."""

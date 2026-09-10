@@ -60,6 +60,20 @@ function safeDeliveryError(error:unknown) {
   };
 }
 
+const MAX_MEDIA_PER_DELIVERY = 9;
+
+function normalizeMediaIds(payload:any):string[] {
+  const ids=(Array.isArray(payload.media_ids)?payload.media_ids:[]).filter(
+    (id:unknown):id is string=>typeof id==='string' && id.length>0);
+  if(typeof payload.media_id==='string' && !ids.includes(payload.media_id))ids.push(payload.media_id);
+  return ids.slice(0,MAX_MEDIA_PER_DELIVERY);
+}
+
+function validMediaIds(payload:any):boolean {
+  return payload.media_ids===undefined ||
+    (Array.isArray(payload.media_ids) && payload.media_ids.every((id:unknown)=>typeof id==='string'));
+}
+
 if(process.argv.includes('login')) {
   const start=await startWeixinLoginWithQr({apiBaseUrl:baseUrl});
   if(!start.qrcodeUrl)throw new Error(start.message);
@@ -165,6 +179,16 @@ async function sendDelivery(deliveryId:string,payload:any) {
       let successfulOperations=0;
       let successfulTargets=0;
       let failedTargets=0;
+      const mediaIds=normalizeMediaIds(payload);
+      const mediaBuffers=new Map<string,Buffer>();
+      const downloadMedia=async(mediaId:string)=>{
+        const cached=mediaBuffers.get(mediaId);
+        if(cached)return cached;
+        const response=await api('/v1/media/'+encodeURIComponent(mediaId));
+        const bytes=Buffer.from(await response.arrayBuffer());
+        mediaBuffers.set(mediaId,bytes);
+        return bytes;
+      };
       for(const [targetIndex,target] of targets.entries()) {
         let phase='resolve_account';
         try {
@@ -184,12 +208,11 @@ async function sendDelivery(deliveryId:string,payload:any) {
             successfulOperations++;
             fragmentIndex++;
           }
-          if(payload.media_id) {
+          for(const mediaId of mediaIds) {
             phase='download_media';
-            const response=await api('/v1/media/'+encodeURIComponent(payload.media_id));
-            const bytes=Buffer.from(await response.arrayBuffer());
+            const bytes=await downloadMedia(mediaId);
             const mime=imageMime(bytes);
-            const filePath=path.join(root,digest(deliveryId+target.routeRef)+({'image/jpeg':'.jpg','image/png':'.png','image/webp':'.webp','image/gif':'.gif'}[mime]));
+            const filePath=path.join(root,digest(deliveryId+target.routeRef+mediaId)+({'image/jpeg':'.jpg','image/png':'.png','image/webp':'.webp','image/gif':'.gif'}[mime]));
             fs.writeFileSync(filePath,bytes,{mode:0o600});
             try {
               phase='send_media';
@@ -251,7 +274,7 @@ const server=http.createServer(async(req,res)=>{
       const chunks=[];let size=0;
       for await(const chunk of req){size+=chunk.length;if(size>1024*1024)throw new Error('too large');chunks.push(chunk);}
       const payload=JSON.parse(Buffer.concat(chunks).toString());
-      if(typeof payload.delivery_id!=='string' || typeof payload.reply_route_ref!=='string' || typeof payload.text!=='string')throw new Error('invalid payload');
+      if(typeof payload.delivery_id!=='string' || typeof payload.reply_route_ref!=='string' || typeof payload.text!=='string' || !validMediaIds(payload))throw new Error('invalid payload');
       store.outgoing(payload.delivery_id,payload);
       respond(200,await sendDelivery(payload.delivery_id,payload));return;
     }
@@ -259,7 +282,7 @@ const server=http.createServer(async(req,res)=>{
       const chunks=[];let size=0;
       for await(const chunk of req){size+=chunk.length;if(size>1024*1024)throw new Error('too large');chunks.push(chunk);}
       const payload=JSON.parse(Buffer.concat(chunks).toString());
-      if(typeof payload.delivery_id!=='string' || typeof payload.text!=='string')throw new Error('invalid payload');
+      if(typeof payload.delivery_id!=='string' || typeof payload.text!=='string' || !validMediaIds(payload))throw new Error('invalid payload');
       payload.broadcast=true;
       store.outgoing(payload.delivery_id,payload);
       respond(200,await sendDelivery(payload.delivery_id,payload));return;

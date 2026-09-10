@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0,str(Path(__file__).parents[3]/'apps/httpserver'))
 sys.path.insert(0,str(Path(__file__).parents[3]/'apps/wechat-edge'))
 from usagi_httpserver.api import create_app
+from usagi_httpserver.draft_images import selected_image_indices
 from usagi_httpserver.service import ApplicationService
 from usagi_httpserver.store import AppStore
 from usagi_httpserver.tool_specs import XHS_TOOL_SPECS
@@ -21,6 +22,7 @@ from usagi_httpserver.wechat_worker import WeChatMaterialWorker
 from wechat_edge.spool import Spool, overlap
 
 from tests.tools.test_durable_approval import build
+from usagi_agent.prompts import WECHAT_MATERIAL_PROMPT
 from usagi_agent.types.refs import ArtifactRef
 
 
@@ -127,6 +129,9 @@ async def test_material_window_calls_agent_directly_and_settles_pool(tmp_path,pu
     with store.db() as db:
         assert db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0]==0
         assert db.execute('SELECT status FROM events').fetchone()[0]==expected
+        payload=json.loads(db.execute('SELECT payload FROM deliveries').fetchone()[0])
+    assert payload['broadcast'] is True
+    assert payload['media_ids']==['media']  # draft without a marker still shows every image
 
 
 @pytest.mark.asyncio
@@ -273,7 +278,7 @@ def test_delivery_message_id_maps_back_to_session(tmp_path):
         'message_id':'outer','item_msg_id':'quoted-id'}],'sent')
     assert complete
     assert store.session_for_message('quoted-id')=='session-1'
-    assert XHS_TOOL_SPECS['xhs_publish_content']['requires_approval'] is True
+    assert XHS_TOOL_SPECS['publish_content']['requires_approval'] is True
 
 
 def test_ingress_dedup_worker_approval_and_restart(tmp_path):
@@ -331,3 +336,164 @@ def test_ingress_dedup_worker_approval_and_restart(tmp_path):
         with store.db() as db:
             assert db.execute('SELECT COUNT(*) FROM events').fetchone()[0]==2
             assert db.execute('SELECT COUNT(*) FROM deliveries').fetchone()[0]>=2
+
+
+def test_selected_image_indices_three_states():
+    assert selected_image_indices('您的小红书运营助手：标题\n正文',total=2) is None
+    assert selected_image_indices('草稿\n配图：无',total=2)==[]
+    assert selected_image_indices('草稿\n配图：第1张、第3张',total=5)==[1,3]
+    assert selected_image_indices('旧稿\n配图：第1张\n新稿\n配图：第 2 张',total=2)==[2]
+    assert selected_image_indices('配图:2,3',total=3)==[2,3]
+    assert selected_image_indices('配图：第1张、第9张',total=2)==[1]
+    assert selected_image_indices('配图：第9张',total=2)==[]
+
+
+def test_wechat_material_prompt_render_smoke():
+    rendered=WECHAT_MATERIAL_PROMPT.render({'material_text':'素材文本'})
+    for fragment in ('先判断','xhs_publish_content','这一轮禁止调用',
+                     '配图：第1张、第3张','配图：无','您的小红书运营助手：',
+                     '素材文字：\n素材文本'):
+        assert fragment in rendered
+
+
+def test_session_media_positions_survive_duplicates_and_replays(tmp_path):
+    store=AppStore(tmp_path/'app.db')
+    store.record_session_media('session',['a','a','b'])
+    assert store.session_media_ids('session')==['a','a','b']
+    store.record_session_media('session',['a','a','b'])  # replayed execution keeps numbering
+    assert store.session_media_ids('session')==['a','a','b']
+    store.record_session_media('session',['c'])
+    assert store.session_media_ids('session')==['a','a','b','c']
+
+
+class _Outcome:
+    def __init__(self,kind):
+        self.kind=kind
+    def model_dump(self,mode=None):
+        return {'kind':self.kind}
+
+
+class _DraftServer:
+    def __init__(self,message,kind='completed'):
+        self.message=message
+        self.kind=kind
+        self.requests=[]
+        self.runtime=SimpleNamespace(persistence=SimpleNamespace(
+            artifact_manager=SimpleNamespace(),
+            tool_execution_store=SimpleNamespace(list_by_run=self._tools)))
+    async def _tools(self,run_id):
+        return ()
+    async def create_session(self,request,auth=None):
+        self.requests.append(request)
+        return SimpleNamespace(session_id='session',run_id='run',
+            outcome=_Outcome(self.kind),message=self.message)
+
+
+def _media_window_store(tmp_path):
+    store=AppStore(tmp_path/'app.db')
+    for name in ('one','two'):
+        image=tmp_path/f'{name}.png';image.write_bytes(name.encode())
+        digest=hashlib.sha256(name.encode()).hexdigest()
+        with store.db() as db:
+            db.execute('INSERT INTO media VALUES (?,?,?,?,?)',
+                (name,'owner',str(image),'image/png',digest))
+    event={'account_ref':'a','source_stream_id':'s','conversation_ref':'c','source_gap':False,
+           'source_event_ref':'1','content_parts':[
+               {'type':'image','media_id':'one'},{'type':'text','text':'素材'},
+               {'type':'image','media_id':'two'}]}
+    store.accept('owner','wxauto','material',event)
+    return store
+
+
+async def _draft_delivery_payload(tmp_path,message,kind='completed'):
+    store=_media_window_store(tmp_path)
+    window=store.select_material_window(silence=0,now=time.time()+1)
+    class Artifacts:
+        async def put(self,**kwargs):
+            return ArtifactRef(artifact_id='artifact',content_type='image/png')
+    server=_DraftServer(message,kind)
+    server.runtime.persistence.artifact_manager=Artifacts()
+    worker=WeChatMaterialWorker(server,store,{'super_uid':'6'},stopping=SimpleNamespace())
+    await worker.execute(window)
+    with store.db() as db:
+        rows=db.execute('SELECT payload FROM deliveries').fetchall()
+    return store,[json.loads(row[0]) for row in rows]
+
+
+@pytest.mark.asyncio
+async def test_material_draft_broadcasts_only_selected_images(tmp_path):
+    store,payloads=await _draft_delivery_payload(
+        tmp_path,'您的小红书运营助手：草稿\n配图：第2张')
+    assert [payload['media_ids'] for payload in payloads]==[['two']]
+
+
+@pytest.mark.asyncio
+async def test_insufficient_draft_returns_to_pool_silently(tmp_path):
+    store,payloads=await _draft_delivery_payload(
+        tmp_path,'您的小红书运营助手：素材不足：缺少可用文字。')
+    assert payloads==[]
+    with store.db() as db:
+        assert db.execute('SELECT status FROM events').fetchone()[0]=='unconsumed'
+
+
+@pytest.mark.asyncio
+async def test_suspended_draft_broadcasts_text_without_images(tmp_path):
+    store,payloads=await _draft_delivery_payload(
+        tmp_path,'₍ᐢ..ᐢ₎ USAGI想使用xhs_publish_content工具…',kind='suspended')
+    assert len(payloads)==1
+    assert 'media_ids' not in payloads[0]
+
+
+@pytest.mark.asyncio
+async def test_interactive_revision_reply_carries_selected_images(tmp_path):
+    store=AppStore(tmp_path/'app.db')
+    store.record_delivery_messages('delivery','session',[{
+        'client_id':'client','item_msg_id':'draft-message'}],'sent')
+    store.record_session_media('session',['one','two'])
+    store.enqueue('owner','reply',{
+        'kind':'message','query':'换成第2张','content_parts':[],'mode':'interactive',
+        'conversation_ref':'c','reply_route_ref':'route','uid':'owner',
+        'message_id':'m2','ref_msg_id':'draft-message','event_range':[1,1]})
+    job=store.claim()
+    class Sessions:
+        async def get(self,session_id):
+            return SimpleNamespace(uid='owner')
+    class Server:
+        runtime=SimpleNamespace(session_manager=Sessions())
+        async def continue_session(self,session_id,request,auth=None):
+            return SimpleNamespace(session_id='session',run_id='run2',
+                outcome=_Outcome('completed'),
+                message='您的小红书运营助手：已更新\n配图：第2张')
+    service=ApplicationService(Server(),store,{'super_uid':'6'})
+    await service.execute(job)
+    with store.db() as db:
+        payload=json.loads(db.execute('SELECT payload FROM deliveries').fetchone()[0])
+    assert payload['session_id']=='session'
+    assert payload['media_ids']==['two']
+
+
+@pytest.mark.asyncio
+async def test_interactive_plain_reply_has_no_media_ids(tmp_path):
+    store=AppStore(tmp_path/'app.db')
+    store.record_delivery_messages('delivery','session',[{
+        'client_id':'client','item_msg_id':'draft-message'}],'sent')
+    store.record_session_media('session',['one','two'])
+    store.enqueue('owner','reply',{
+        'kind':'message','query':'今天天气如何','content_parts':[],'mode':'interactive',
+        'conversation_ref':'c','reply_route_ref':'route','uid':'owner',
+        'message_id':'m2','ref_msg_id':'draft-message','event_range':[1,1]})
+    job=store.claim()
+    class Sessions:
+        async def get(self,session_id):
+            return SimpleNamespace(uid='owner')
+    class Server:
+        runtime=SimpleNamespace(session_manager=Sessions())
+        async def continue_session(self,session_id,request,auth=None):
+            return SimpleNamespace(session_id='session',run_id='run2',
+                outcome=_Outcome('completed'),
+                message='您的小红书运营助手：只是一段普通回答')
+    service=ApplicationService(Server(),store,{'super_uid':'6'})
+    await service.execute(job)
+    with store.db() as db:
+        payload=json.loads(db.execute('SELECT payload FROM deliveries').fetchone()[0])
+    assert 'media_ids' not in payload

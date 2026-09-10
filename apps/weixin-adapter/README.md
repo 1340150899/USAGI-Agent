@@ -23,8 +23,8 @@ Windows 可用 `npm.cmd`，PowerShell 环境变量语法为 `$env:NAME = 'value'
 | 接口 | 用途 |
 |---|---|
 | GET /health/live | 登录及最近轮询状态 |
-| POST /internal/messages | `{delivery_id,reply_route_ref,text,media_id?}`，等待发送完成并返回消息 ID |
-| POST /internal/broadcasts | `{delivery_id,text,media_id?}`，等待向所有已学习路由发送完成 |
+| POST /internal/messages | `{delivery_id,reply_route_ref,text,media_ids?,media_id?}`，等待发送完成并返回消息 ID |
+| POST /internal/broadcasts | `{delivery_id,text,media_ids?,media_id?}`，等待向所有已学习路由发送完成 |
 | GET /internal/messages/{delivery_id} | 幂等重试或诊断时读取已完成的发送结果 |
 | GET /internal/accounts | 账号引用与登录状态 |
 

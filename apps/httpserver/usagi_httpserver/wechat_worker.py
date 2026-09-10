@@ -12,6 +12,8 @@ from usagi_agent.types.content import ImageContentPart
 from usagi_agent.types.refs import ArtifactOwner, PrincipalRef
 from usagi_agent.types.run import RunStartRequest
 
+from .draft_images import selected_image_indices
+
 log = logging.getLogger(__name__)
 
 
@@ -66,6 +68,11 @@ class WeChatMaterialWorker:
         image_parts, paths = await self._material_images(
             body.get("content_parts", []), window["principal"], uid
         )
+        media_ids = [
+            part["media_id"]
+            for part in body.get("content_parts", [])
+            if part["type"] == "image"
+        ]
         request = RunStartRequest(
             scenario_key=self.scenario,
             request_idempotency_key=window["id"],
@@ -82,15 +89,23 @@ class WeChatMaterialWorker:
         self.store.bind_material_window(
             window["id"], result.session_id, result.run_id
         )
+        self.store.record_session_media(result.session_id, media_ids)
         await self._settle_initial_turn(
             window["id"], result.run_id, result.outcome.kind, result.message
         )
-        self._notify(
-            window,
-            result.message,
-            session_id=result.session_id,
-            broadcast=True,
+        # A draft the model rejected for thin material returns to the pool
+        # silently; only actionable outcomes reach the user.
+        insufficient = (
+            result.outcome.kind == "completed" and "素材不足" in result.message
         )
+        if not insufficient:
+            self._notify(
+                window,
+                result.message,
+                session_id=result.session_id,
+                broadcast=True,
+                media_ids=self._draft_media_ids(result, media_ids),
+            )
 
     async def reconcile_selected_windows(self):
         """Settle material whose approval was resumed by the interaction service."""
@@ -178,7 +193,24 @@ class WeChatMaterialWorker:
             return "unknown"
         return "not_published"
 
-    def _notify(self, window, text, *, session_id=None, broadcast=False):
+    def _draft_media_ids(self, result, window_media_ids):
+        """Map the draft's 配图 marker to the window images it should carry.
+
+        A completed draft without a marker still ships every window image —
+        the user must see what the model picked from. Anything else (an
+        explicit empty selection, suspended approvals, failures) stays
+        text-only.
+        """
+        if result.outcome.kind != "completed":
+            return []
+        indices = selected_image_indices(
+            result.message, total=len(window_media_ids)
+        )
+        if indices is None:
+            return list(window_media_ids)
+        return [window_media_ids[index - 1] for index in indices]
+
+    def _notify(self, window, text, *, session_id=None, broadcast=False, media_ids=None):
         route = self.settings.get("reply_routes", {}).get(window["principal"])
         payload = {
             "reply_route_ref": route,
@@ -187,4 +219,6 @@ class WeChatMaterialWorker:
         }
         if session_id:
             payload["session_id"] = session_id
+        if media_ids:
+            payload["media_ids"] = list(media_ids)
         self.store.notify(window["id"] + ":message", window["principal"], payload)

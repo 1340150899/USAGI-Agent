@@ -14,19 +14,22 @@ PYTHON_TOOL_SPECS = {
 # These operations only retrieve data. Pinning their risk classification here is
 # deliberate: MCP annotations are untrusted and can vary between server releases.
 SAFE_XHS_TOOLS = (
-    "xhs_auth_status",
-    "xhs_discover_feeds",
-    "xhs_search_note",
-    "xhs_get_note_detail",
-    "xhs_get_user_notes",
+    "check_login_status",
+    "list_feeds",
+    "search_feeds",
+    "get_feed_detail",
+    "user_profile",
 )
 
 WRITE_XHS_TOOLS = (
-    "xhs_auth_login",
-    "xhs_auth_logout",
-    "xhs_comment_on_note",
-    "xhs_delete_note",
-    "xhs_publish_content",
+    "get_login_qrcode",
+    "delete_cookies",
+    "post_comment_to_feed",
+    "reply_comment_in_feed",
+    "publish_content",
+    "publish_with_video",
+    "like_feed",
+    "favorite_feed",
 )
 
 
@@ -41,14 +44,17 @@ def _write(*, requires_approval=True):
 
 
 XHS_TOOL_SPECS = {
-    "xhs_auth_status": _read(requires_approval=True),
-    "xhs_discover_feeds": _read(requires_approval=True),
-    "xhs_search_note": _read(requires_approval=True),
-    "xhs_get_note_detail": _read(requires_approval=True),
-    "xhs_get_user_notes": _read(requires_approval=True),
-    "xhs_auth_login": _write(requires_approval=True),
-    "xhs_auth_logout": _write(requires_approval=True),
-    "xhs_comment_on_note": _write(requires_approval=True),
-    "xhs_delete_note": _write(requires_approval=True),
-    "xhs_publish_content": _write(requires_approval=True),
+    "check_login_status": _read(requires_approval=True),
+    "list_feeds": _read(requires_approval=True),
+    "search_feeds": _read(requires_approval=True),
+    "get_feed_detail": _read(requires_approval=True),
+    "user_profile": _read(requires_approval=True),
+    "get_login_qrcode": _write(requires_approval=True),
+    "delete_cookies": _write(requires_approval=True),
+    "post_comment_to_feed": _write(requires_approval=True),
+    "reply_comment_in_feed": _write(requires_approval=True),
+    "publish_content": _write(requires_approval=True),
+    "publish_with_video": _write(requires_approval=True),
+    "like_feed": _write(requires_approval=True),
+    "favorite_feed": _write(requires_approval=True),
 }

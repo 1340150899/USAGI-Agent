@@ -12,15 +12,15 @@
 分层原则：
 
 - `usagi-agent` 是与业务无关、可独立发布和测试的通用框架。
-- `apps/xhs-autopost` 是框架的第一个业务应用，定义工作流、业务 Agent、规则和 UI。
-- `plugins/wxauto`、`plugins/social-auto-upload` 是可替换插件，框架核心不引用它们。
+- `apps/httpserver` 是框架的第一个业务应用入口；`apps/xiaohongshu-mcp` 提供小红书工具服务。
+- `plugins/wxauto` 是可替换插件；小红书能力由 `apps/xiaohongshu-mcp` 提供，框架核心不引用具体实现。
 - 小红书需求用于验证框架抽象是否实用，但任何业务概念都不能反向渗透进框架 Kernel。
 
 采用 **事件驱动 + 可恢复状态机 + Adapter + Pipeline + 专用 Agent** 的混合架构。
 
 - 状态机负责顺序、分支、重试、超时、幂等和人工暂停，不能交给 LLM 自由决定。
 - Agent 只处理需要语义理解的节点：可发布性判断、上下文补全、素材选择、内容创作、风险审核、定向修订和记忆提炼。
-- Adapter 隔离微信、小红书、LLM、存储等外部依赖，业务流程不直接依赖 `wxauto` 或 `social-auto-upload`。
+- Adapter 隔离微信、小红书、LLM、存储等外部依赖，业务流程不直接依赖 `wxauto` 或内置 MCP 的实现细节。
 - WorkflowSpec 与 Agent PipelineSpec 将 Agent、规则和 Tool 组织为 LangGraph 节点/子图；节点只返回 State Patch，执行快照由 LangGraph checkpointer 保存。
 - Memory 采用“候选记忆 → 验证 → 晋升”的闭环，禁止把全部聊天或单次模型判断直接写成长期规则。
 
@@ -118,7 +118,7 @@ flowchart TB
     subgraph Edge[Windows Edge Runtime]
       WX[wxauto Adapter]
       Media[媒体下载/哈希/OCR]
-      XHS[social-auto-upload Adapter]
+      XHS[内置 Xiaohongshu MCP Adapter]
       Watchdog[桌面会话 Watchdog]
     end
 
@@ -283,7 +283,7 @@ class MemoryAdapter(Protocol):
 
 - `WxAutoMessageAdapter`：只负责将 wxauto 事件转成统一消息事件。
 - `ManualInputAdapter`：用于测试和人工补录，绕过桌面自动化。
-- `XhsSauPublisherAdapter`：仅封装 `sau xiaohongshu check/upload-note`；当前没有可靠 delete/unpublish API。
+- `XiaohongshuMCPAdapter`：通过 Streamable HTTP 连接仓库内置的 `apps/xiaohongshu-mcp`；当前没有可靠 delete/unpublish API。
 - OpenAI-compatible 固定调用流程位于 `AgentManager`；`ModelAdapter` 是其内部执行策略接口，scripted 模式由 Manager 自行创建测试实现，上层不能注入。协议兼容不等于允许发送原始聊天。
 - `PostgresMemoryAdapter`：结构化记忆和 pgvector 检索。
 
@@ -490,43 +490,13 @@ LangGraph State/checkpoint 只保存低敏路由枚举、tenant-scoped HMAC，�
 ## 10. 小红书应用工程目录
 
 ```text
-apps/xhs-autopost/
-  src/xhs_autopost/
-    domain/
-      models/                 # Message、Snapshot、Draft、ReviewReport
-      events/                 # 领域事件
-      policies/               # 确定性业务规则
-    application/
-      pipelines/              # 使用框架公开 API 声明工作流
-      services/               # 会话、审批、发布用例
-    agents/
-      boundary.py
-      publishability.py
-      post_writer.py
-      reviewers/
-      revision.py
-      memory_curator.py
-    adapters/
-      inbound/manual.py
-      context_build/
-        chat_retriever.py
-        material_selector.py
-      plugins.py              # 装配通用框架和外部插件
-    infrastructure/
-      db/
-    interfaces/
-      api/
-      worker/
-      review_ui/
-  tests/
-    unit/
-    contract/
-    pipeline/
-    evals/
-
+apps/
+  httpserver/                 # 应用组合入口、审批和消息 Worker
+  weixin-adapter/             # 微信通信
+  wechat-edge/                # Windows 素材采集
+  xiaohongshu-mcp/            # Go MCP 服务
 plugins/
   wxauto/
-  social-auto-upload/
 ```
 
 应用依赖 `usagi-agent` 的公开接口；插件依赖框架的 Port/Tool SDK。依赖方向固定为 `interfaces/adapters → application → domain`，业务 `domain` 和框架 Kernel 都不引用任何外部 SDK。
@@ -777,4 +747,4 @@ deployment_attestation_ref: null      # integration/真实外发 Bundle 必填�
 - [OpenTelemetry](https://opentelemetry.io/docs/)：统一生成和采集 trace、metric 与 log。
 - [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/)：通过 OTLP 接收、处理并导出遥测数据。
 - [wxauto](https://github.com/cluic/wxauto)：Windows 微信客户端 UIAutomation 消息收发；其许可/用途声明必须单独评估。
-- [social-auto-upload](https://github.com/dreammis/social-auto-upload)：当前提供小红书浏览器版登录检查、图文/视频上传和 CLI，可通过 Publisher Adapter 封装，避免业务代码绑定其内部模块。
+- [内置 Xiaohongshu MCP](../apps/xiaohongshu-mcp/README.md)：提供浏览器登录、图文/视频发布、检索与互动工具，通过标准 MCP Adapter 接入。

@@ -8,4 +8,4 @@ Reserved slots per the design:
 - `openai-compatible/` — ModelAdapter
 - `postgres/` — durable Store + checkpointer backends
 - `wxauto/` — Windows WeChat message source (xiaohongshu app only)
-- `social-auto-upload/` — Xiaohongshu publisher (xiaohongshu app only)
+- Xiaohongshu publishing is provided by `apps/xiaohongshu-mcp`, not a plugin.

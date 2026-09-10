@@ -5,9 +5,12 @@ Wants=network-online.target
 
 [Service]
 User=usagi
-WorkingDirectory=/opt/usagi
-# Install the pinned package and configure its browser/login as this user first.
-ExecStart=/usr/bin/npx --yes xhs-mcp@0.8.13 mcp --mode http --port 3000
+WorkingDirectory=/opt/usagi/apps/xiaohongshu-mcp
+Environment=COOKIES_PATH=/var/lib/usagi/xiaohongshu/cookies.json
+StateDirectory=usagi/xiaohongshu
+# Build the bundled service and complete browser login as this user first.
+# A graphical desktop must be available because headless mode is prohibited.
+ExecStart=/opt/usagi/apps/xiaohongshu-mcp/build/xiaohongshu-mcp -headless=false -port=:18060
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=45

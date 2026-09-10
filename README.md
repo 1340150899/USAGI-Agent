@@ -36,7 +36,7 @@ USAGI-Agent/
 ├─ apps/httpserver/             # 应用组合入口、持久化队列、审批和通知
 ├─ apps/weixin-adapter/         # 独立 Node 微信通信进程，无 OpenClaw 宿主
 ├─ apps/wechat-edge/            # Windows wxauto 素材采集进程
-├─ apps/xhs-autopost/           # 小红书 MCP 辅助 CLI 与兼容层
+├─ apps/xiaohongshu-mcp/        # Go 小红书 MCP 服务（Streamable HTTP）
 └─ examples/structured_agent/   # 业务无关端到端示例：research_writer
 ```
 
