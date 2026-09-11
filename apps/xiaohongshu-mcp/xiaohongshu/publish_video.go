@@ -148,10 +148,9 @@ func submitPublishVideo(page *rod.Page, title, content string, tags []string, sc
 		return errors.Wrap(err, "绑定商品失败")
 	}
 
-	if err := clickPublishButton(page); err != nil {
+	if _, err := clickPublishButton(page); err != nil {
 		return err
 	}
 
-	time.Sleep(3 * time.Second)
 	return nil
 }

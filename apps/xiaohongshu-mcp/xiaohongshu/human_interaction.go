@@ -1,6 +1,7 @@
 package xiaohongshu
 
 import (
+	"context"
 	"math"
 	"math/rand"
 	"runtime"
@@ -13,8 +14,10 @@ import (
 )
 
 const (
-	humanTypeMinDelay = 25 * time.Millisecond
-	humanTypeMaxDelay = 75 * time.Millisecond
+	// 逐字输入节奏放缓到接近真人手速：之前 25-75ms（约 13-40 字/秒）会触发
+	// 小红书编辑器的输入防护（页面提示"输入异常"并丢弃输入）。
+	humanTypeMinDelay = 60 * time.Millisecond
+	humanTypeMaxDelay = 160 * time.Millisecond
 )
 
 func randomDuration(minDelay, maxDelay time.Duration) time.Duration {
@@ -284,6 +287,19 @@ func humanType(page *rod.Page, text string) error {
 		case char >= 32 && char <= 126:
 			err = page.Keyboard.Type(input.Key(char))
 		default:
+			// 模拟输入法整字上屏：先设置合成文本再提交，产生真实的
+			// compositionstart/update/end + insertText 事件序列。CDP 直接
+			// InsertText 缺少 composition 事件，小红书富文本编辑器的输入
+			// 防护会判定为异常输入（页面提示"输入异常"）并丢弃内容。
+			composition := &proto.InputImeSetComposition{
+				Text:           string(char),
+				SelectionStart: len(string(char)),
+				SelectionEnd:   len(string(char)),
+			}
+			if _, err := page.Call(context.Background(), string(page.SessionID),
+				"Input.imeSetComposition", composition); err != nil {
+				return errors.Wrapf(err, "设置输入法合成状态失败[%c]", char)
+			}
 			err = page.InsertText(string(char))
 		}
 		if err != nil {

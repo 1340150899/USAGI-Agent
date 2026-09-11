@@ -1,7 +1,12 @@
-"""Run in the logged-in Windows desktop session, not Service Session 0."""
+"""Run in the logged-in Windows desktop session, not Service Session 0.
+
+Collection reads the WeChat 4.x local databases directly (wechatauto-replica
+WeChatDB + Listener, no UI); the client UI is only driven when an image's
+original must be fetched (EdgeMediaDownloader tier 3). wechatauto imports
+stay inside the live entry points so spool/events stay importable without
+the dependency installed.
+"""
 import argparse
-import hashlib
-import importlib
 import json
 import logging
 import mimetypes
@@ -11,73 +16,14 @@ from pathlib import Path
 
 import httpx
 
+from .events import build_payload, classify, event_ref
 from .spool import Spool
 
 log = logging.getLogger("wechat_edge")
 
-
-def _runs(values,minimum):
-    runs=[]
-    start=None
-    for index,value in enumerate(values):
-        if value>=minimum and start is None:
-            start=index
-        elif value<minimum and start is not None:
-            runs.append((start,index))
-            start=None
-    if start is not None:
-        runs.append((start,len(values)))
-    return runs
-
-
-def _crop_message_image(image):
-    """Remove the chat row background and avatar from a wxauto4 screenshot."""
-    from PIL import Image,ImageChops,ImageFilter
-
-    rgb=image.convert('RGB')
-    width,height=rgb.size
-    corners=[rgb.getpixel((0,0)),rgb.getpixel((width-1,0)),
-             rgb.getpixel((0,height-1)),rgb.getpixel((width-1,height-1))]
-    background=tuple(int(sum(pixel[channel] for pixel in corners)/len(corners))
-                     for channel in range(3))
-    solid=Image.new('RGB',rgb.size,background)
-    difference=ImageChops.difference(rgb,solid).convert('L').point(
-        lambda value:255 if value>18 else 0
-    ).filter(ImageFilter.MaxFilter(3))
-    columns=[sum(1 for y in range(height) if difference.getpixel((x,y)))
-             for x in range(width)]
-    column_runs=_runs(columns,max(3,height//80))
-    if not column_runs:
-        raise RuntimeError('image region unavailable')
-    left,right=max(column_runs,key=lambda run:(run[1]-run[0])*sum(columns[run[0]:run[1]]))
-    rows=[sum(1 for x in range(left,right) if difference.getpixel((x,y)))
-          for y in range(height)]
-    row_runs=_runs(rows,max(3,(right-left)//80))
-    if not row_runs:
-        raise RuntimeError('image region unavailable')
-    top,bottom=max(row_runs,key=lambda run:(run[1]-run[0])*sum(rows[run[0]:run[1]]))
-    padding=2
-    box=(max(0,left-padding),max(0,top-padding),
-         min(width,right+padding),min(height,bottom+padding))
-    cropped=rgb.crop(box)
-    if cropped.width<32 or cropped.height<32:
-        raise RuntimeError('image region too small')
-    return cropped
-
-
-def _capture_wxauto4_image(message,target):
-    """Capture a WeChat 4.x image without relying on its unstable viewer UI."""
-    from PIL import ImageGrab
-
-    message.roll_into_view()
-    rectangle=message.control.BoundingRectangle
-    box=(int(rectangle.left),int(rectangle.top),
-         int(rectangle.right),int(rectangle.bottom))
-    if box[2]<=box[0] or box[3]<=box[1]:
-        raise RuntimeError('invalid image message bounds')
-    screenshot=ImageGrab.grab(bbox=box,all_screens=True)
-    _crop_message_image(screenshot).save(target,format='PNG')
-    return target
+REQUIRED_KEYS = ('server_url', 'token_env', 'account_ref', 'self_ref', 'conversations')
+REQUIRED_CONVERSATION_KEYS = ('name', 'ref', 'sender_ref')
+DEPRECATED_KEYS = ('wxauto_module', 'poll_seconds', 'self_name')
 
 
 def configure_logging():
@@ -89,101 +35,191 @@ def configure_logging():
     log.propagate = False
 
 
-def upload_loop(spool,config,stop):
-    with httpx.Client(base_url=config['server_url'],headers={
-            'Authorization':'Bearer '+os.environ[config.get('token_env','USAGI_WXAUTO_TOKEN')]},timeout=30) as client:
+def load_config(path):
+    config = json.loads(Path(path).read_text(encoding='utf-8'))
+    missing = [key for key in REQUIRED_KEYS if not config.get(key)]
+    if missing:
+        raise SystemExit('config missing required fields: ' + ', '.join(missing))
+    if not config['conversations']:
+        raise SystemExit('explicit conversation allowlist required')
+    for conversation in config['conversations']:
+        missing = [key for key in REQUIRED_CONVERSATION_KEYS
+                   if not conversation.get(key)]
+        if missing:
+            raise SystemExit('conversation %r missing fields: %s' % (
+                conversation.get('name'), ', '.join(missing)))
+    for key in DEPRECATED_KEYS:
+        if key in config:
+            log.warning('config key %r is deprecated and ignored', key)
+    if os.name != 'nt':
+        raise SystemExit('live collection requires Windows with WeChat 4.x logged in')
+    return config
+
+
+def _is_critical_db(rel):
+    name = os.path.basename(rel)
+    return name.startswith('message') or name == 'contact.db' or 'session' in rel
+
+
+def init_db(config, stop):
+    """Construct WeChatDB, retrying until WeChat is logged in.
+
+    A construction that leaves message/contact/session databases unkeyed
+    counts as failure — WeChatDB only warns on stderr in that case
+    (wechatauto db.py sets ``db.unkeyed``)."""
+    from wechatauto.db import WeChatDB
+    while not stop.is_set():
+        try:
+            db = WeChatDB(account=config.get('account') or None,
+                          db_dir=config.get('db_dir'))
+            critical = [rel for rel in getattr(db, 'unkeyed', ())
+                        if _is_critical_db(rel)]
+            if critical:
+                raise RuntimeError('unkeyed databases: ' + ', '.join(critical))
+            return db
+        except Exception as exc:
+            config['_status'] = 'initialization_failed:' + type(exc).__name__
+            log.warning('WeChatDB unavailable (%s); retrying in 10s',
+                        type(exc).__name__)
+            stop.wait(10)
+    return None
+
+
+def resolve_conversations(db, config):
+    resolved = []
+    for conversation in config['conversations']:
+        record = dict(conversation)
+        username = record.get('username') or db.username_by_nickname(conversation['name'])
+        if not username:
+            candidates = db.search_contact(conversation['name'])
+            log.error('cannot resolve conversation %r; search candidates: %s',
+                      conversation['name'],
+                      [candidate['username'] for candidate in candidates[:5]])
+            raise SystemExit(2)
+        record['username'] = username
+        record['self_ref'] = config['self_ref']
+        log.info('conversation %r -> %s (pin it in config as "username" to skip '
+                 'nickname lookup)', conversation['name'], username)
+        resolved.append(record)
+    return resolved
+
+
+def make_callback(db, media, spool, config, conversation):
+    def on_message(msg, listener):
+        item = classify(msg, conversation, db.wxid)
+        if item is None:
+            return
+        image_path = None
+        if item['kind'] == 'image':
+            path, tier = media.download(msg['username'], msg['local_id'],
+                                        conversation['name'])
+            log.info('image %s tier=%s', event_ref(msg['username'], msg['sort_seq']), tier)
+            if path is None:
+                config['_failed_images'] = config.get('_failed_images', 0) + 1
+            else:
+                image_path = str(path)
+        payload = build_payload(config=config, conversation=conversation,
+                                msg=msg, item=item, image_path=image_path)
+        spool.enqueue(payload['source_event_ref'],
+                      json.dumps(payload, ensure_ascii=False))
+        log.info("抓到了消息")
+    return on_message
+
+
+def upload_loop(spool, config, stop):
+    # trust_env=False: never route the local httpserver through a system
+    # proxy (Clash et al. answer loopback requests with 502).
+    with httpx.Client(base_url=config['server_url'], trust_env=False, headers={
+            'Authorization': 'Bearer ' + os.environ[config.get('token_env', 'USAGI_WXAUTO_TOKEN')]}, timeout=30) as client:
         while not stop.is_set():
-            for event_id,raw in spool.pending():
-                body=json.loads(raw)
-                image=body.pop('_image_path',None)
+            for event_id, raw in spool.pending():
+                body = json.loads(raw)
+                image = body.pop('_image_path', None)
                 try:
                     if image:
-                        file=Path(image)
-                        result=client.post('/v1/ingress/media',content=file.read_bytes(),
-                            headers={'Content-Type':mimetypes.guess_type(file.name)[0] or 'application/octet-stream'})
+                        file = Path(image)
+                        result = client.post('/v1/ingress/media', content=file.read_bytes(),
+                            headers={'Content-Type': mimetypes.guess_type(file.name)[0] or 'application/octet-stream'})
                         result.raise_for_status()
-                        body['content_parts'].append({'type':'image','media_id':result.json()['media_id']})
-                    response=client.post('/v1/ingress/events',json=body);response.raise_for_status()
+                        body['content_parts'].append({'type': 'image', 'media_id': result.json()['media_id']})
+                    response = client.post('/v1/ingress/events', json=body); response.raise_for_status()
                     spool.ack(event_id)
                     log.info("发送了消息")
-                except (httpx.HTTPError,OSError):
+                except (httpx.HTTPError, OSError):
                     break
             try:
-                client.post('/v1/adapters/heartbeat',json={'pending':len(spool.pending()),'collector':config.get('_status','starting')}).raise_for_status()
+                client.post('/v1/adapters/heartbeat', json={
+                    'pending': spool.size(),
+                    'failed_images': config.get('_failed_images', 0),
+                    'collector': config.get('_status', 'starting')}).raise_for_status()
             except httpx.HTTPError:
                 pass
             stop.wait(2)
 
 
+def watchdog(db, config, stop):
+    """The Listener swallows poll errors, so probe the database directly;
+    a WeChat logout otherwise looks like a healthy silent process."""
+    failures = 0
+    while not stop.wait(30):
+        try:
+            db.get_sessions(limit=1)
+            if failures:
+                log.info('collector recovered after %d probe failures', failures)
+            failures = 0
+            config['_status'] = 'observing'
+        except Exception as exc:
+            failures += 1
+            config['_status'] = 'unavailable:' + type(exc).__name__
+            log.warning('probe failed (%d/10): %s', failures, type(exc).__name__)
+            if failures >= 10:
+                log.error('10 consecutive probe failures; exiting so the '
+                          'scheduled task restarts us')
+                os._exit(1)
+
+
 def main():
-    parser=argparse.ArgumentParser()
-    parser.add_argument('--config',required=True)
-    parser.add_argument('--rebaseline',action='store_true',help='Discard local observation anchor; separately clear any server gap after review')
-    args=parser.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', required=True)
+    args = parser.parse_args()
     configure_logging()
-    config=json.loads(Path(args.config).read_text(encoding='utf-8'))
-    if os.name!='nt':raise RuntimeError('live wxauto collection requires Windows')
-    if not config.get('conversations'):raise ValueError('explicit conversation allowlist required')
-    root=Path(config.get('data_dir','.usagi-edge')).resolve();root.mkdir(parents=True,exist_ok=True)
-    (root/'images').mkdir(exist_ok=True)
-    spool=Spool()
-    module=config.get('wxauto_module','wxauto')
-    if module not in ('wxauto','wxauto4','wxautox4'):raise ValueError('unsupported wxauto module')
-    factory=importlib.import_module(module).WeChat
-    wx=None
-    stop=threading.Event()
-    worker=threading.Thread(target=upload_loop,args=(spool,config,stop),daemon=True);worker.start()
-    baseline=args.rebaseline
+    config = load_config(args.config)
+    root = Path(config.get('data_dir', '.usagi/edge')).resolve(); root.mkdir(parents=True, exist_ok=True)
+    spool = Spool()
+    stop = threading.Event()
+    listener = None
+    worker = threading.Thread(target=upload_loop, args=(spool, config, stop), daemon=True); worker.start()
     try:
+        db = init_db(config, stop)
+        if db is None:
+            return
+        conversations = resolve_conversations(db, config)
+        from .images import EdgeMediaDownloader
+        from wechatauto.db import Listener
+        media = EdgeMediaDownloader(db, root / 'images')
+        config['_status'] = 'detecting_image_key'
+        media.refresh_keys()
+        listener = Listener(db, interval=float(config.get('interval_seconds', 1.0)))
+        for conversation in conversations:
+            listener.add_listener(conversation['username'],
+                                  make_callback(db, media, spool, config, conversation))
+        listener.start()
+        config['_status'] = 'observing'
+        log.info('listening on %d conversation(s)', len(conversations))
+        probe = threading.Thread(target=watchdog, args=(db, config, stop), daemon=True); probe.start()
         while not stop.is_set():
-            if wx is None:
-                try:
-                    wx=factory(ads=False) if module=='wxauto4' else factory()
-                except Exception as exc:
-                    config['_status']='initialization_failed:'+type(exc).__name__
-                    stop.wait(10)
-                    continue
-            for conversation in config['conversations']:
-                try:
-                    wx.ChatWith(conversation['name'])
-                    observed=[]
-                    for msg in wx.GetAllMessage():
-                        kind=getattr(msg,'type','text')
-                        if kind not in ('text','image'):continue
-                        sender=str(getattr(msg,'sender',''))
-                        outgoing=getattr(msg,'attr','')=='self' or sender==config.get('self_name')
-                        text=str(getattr(msg,'content',''))
-                        record={'sender_ref':config['self_ref'] if outgoing else conversation['sender_ref'],
-                                'direction':'outgoing' if outgoing else 'incoming','text':text}
-                        record['signature']=hashlib.sha256(json.dumps([sender,kind,text,str(getattr(msg,'time',''))],ensure_ascii=False).encode()).hexdigest()
-                        if kind=='image':
-                            if module=='wxauto4':
-                                file=_capture_wxauto4_image(
-                                    msg,root/'images'/(record['signature']+'.png')
-                                )
-                            else:
-                                # Download while the UI message object is still valid.
-                                download=getattr(msg,'download',None)
-                                if download is None:raise RuntimeError('this wxauto version has no image download API')
-                                file=download(dir_path=str(root/'images'))
-                            if not isinstance(file,(str,Path)) or not Path(file).is_file():raise RuntimeError('image unavailable')
-                            data=Path(file).read_bytes()
-                            immutable=root/'images'/(hashlib.sha256(data).hexdigest()+Path(file).suffix)
-                            if not immutable.exists():immutable.write_bytes(data)
-                            record['image_path']=str(immutable)
-                        observed.append(record)
-                    captured=spool.capture(config,conversation,observed,rebaseline=baseline)
-                    for _ in range(captured):
-                        log.info("抓到了消息")
-                    config['_status']='observing'
-                except Exception as exc:
-                    config['_status']='unavailable:'+type(exc).__name__
-            baseline=False
-            stop.wait(config.get('poll_seconds',3))
+            stop.wait(5)
     except KeyboardInterrupt:
         pass
     finally:
-        stop.set();worker.join(timeout=35)
+        stop.set()
+        if listener is not None:
+            try:
+                listener.stop()
+            except Exception:
+                pass
+        worker.join(timeout=35)
 
 
-if __name__=='__main__':main()
+if __name__ == '__main__':
+    main()

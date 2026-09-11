@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/input"
@@ -72,15 +73,15 @@ func NewPublishImageAction(page *rod.Page) (*PublishAction, error) {
 	}, nil
 }
 
-func (p *PublishAction) Publish(ctx context.Context, content PublishImageContent) error {
+func (p *PublishAction) Publish(ctx context.Context, content PublishImageContent) (string, error) {
 	if len(content.ImagePaths) == 0 {
-		return errors.New("图片不能为空")
+		return "", errors.New("图片不能为空")
 	}
 
 	page := p.page.Context(ctx)
 
 	if err := uploadImages(page, content.ImagePaths); err != nil {
-		return errors.Wrap(err, "小红书上传图片失败")
+		return "", errors.Wrap(err, "小红书上传图片失败")
 	}
 
 	tags := content.Tags
@@ -91,11 +92,12 @@ func (p *PublishAction) Publish(ctx context.Context, content PublishImageContent
 
 	logrus.Infof("发布内容: title=%s, images=%v, tags=%v, schedule=%v, original=%v, visibility=%s, products=%v", content.Title, len(content.ImagePaths), tags, content.ScheduleTime, content.IsOriginal, content.Visibility, content.Products)
 
-	if err := submitPublish(page, content.Title, content.Content, tags, content.ScheduleTime, content.IsOriginal, content.Visibility, content.Products); err != nil {
-		return errors.Wrap(err, "小红书发布失败")
+	noteID, err := submitPublish(page, content.Title, content.Content, tags, content.ScheduleTime, content.IsOriginal, content.Visibility, content.Products)
+	if err != nil {
+		return "", errors.Wrap(err, "小红书发布失败")
 	}
 
-	return nil
+	return noteID, nil
 }
 
 func removePopCover(page *rod.Page) {
@@ -276,19 +278,19 @@ func waitForUploadComplete(page *rod.Page, expectedCount int) error {
 	return errors.Errorf("第%d张图片上传超时(60s)，请检查网络连接和图片大小", expectedCount)
 }
 
-func submitPublish(page *rod.Page, title, content string, tags []string, scheduleTime *time.Time, isOriginal bool, visibility string, products []string) error {
+func submitPublish(page *rod.Page, title, content string, tags []string, scheduleTime *time.Time, isOriginal bool, visibility string, products []string) (string, error) {
 	titleElem, err := page.Element("div.d-input input")
 	if err != nil {
-		return errors.Wrap(err, "查找标题输入框失败")
+		return "", errors.Wrap(err, "查找标题输入框失败")
 	}
 	if err := humanFocusAndType(page, titleElem, title); err != nil {
-		return errors.Wrap(err, "输入标题失败")
+		return "", errors.Wrap(err, "输入标题失败")
 	}
 
 	// 检查标题长度
 	time.Sleep(500 * time.Millisecond)
 	if err := checkTitleMaxLength(page); err != nil {
-		return err
+		return "", err
 	}
 	slog.Info("检查标题长度：通过")
 
@@ -296,57 +298,152 @@ func submitPublish(page *rod.Page, title, content string, tags []string, schedul
 
 	contentElem, ok := getContentElement(page)
 	if !ok {
-		return errors.New("没有找到内容输入框")
+		return "", errors.New("没有找到内容输入框")
 	}
-	if err := humanFocusAndType(page, contentElem, content); err != nil {
-		return errors.Wrap(err, "输入正文失败")
+	// 正文按行整段插入，随后回读编辑器渲染文本与入参比对。编辑器前端
+	// 的输入防护可能拦截异常输入事件（页面提示"输入异常"并丢弃内容），
+	// 不做回读会静默发布无正文的笔记。
+	if err := humanClick(page, contentElem); err != nil {
+		return "", errors.Wrap(err, "聚焦正文编辑器失败")
 	}
+	if err := humanType(page, content); err != nil {
+		return "", errors.Wrap(err, "输入正文失败")
+	}
+	if err := verifyEditorContent(page, contentElem, content); err != nil {
+		return "", err
+	}
+	slog.Info("正文输入校验：通过")
+
 	if err := waitAndClickTitleInput(titleElem); err != nil {
-		return err
+		return "", err
 	}
 	if err := inputTags(contentElem, tags); err != nil {
-		return err
+		return "", err
 	}
+	if err := verifyTagsInput(contentElem, tags); err != nil {
+		return "", err
+	}
+	slog.Info("话题输入校验：通过")
 
 	time.Sleep(1 * time.Second)
 
 	// 检查正文长度
 	if err := checkContentMaxLength(page); err != nil {
-		return err
+		return "", err
 	}
 	slog.Info("检查正文长度：通过")
 
 	// 处理定时发布
 	if scheduleTime != nil {
 		if err := setSchedulePublish(page, *scheduleTime); err != nil {
-			return errors.Wrap(err, "设置定时发布失败")
+			return "", errors.Wrap(err, "设置定时发布失败")
 		}
 		slog.Info("定时发布设置完成", "schedule_time", scheduleTime.Format("2006-01-02 15:04"))
 	}
 
 	// 设置可见范围
 	if err := setVisibility(page, visibility); err != nil {
-		return errors.Wrap(err, "设置可见范围失败")
+		return "", errors.Wrap(err, "设置可见范围失败")
 	}
 
 	// 处理原创声明
 	if isOriginal {
 		if err := setOriginal(page); err != nil {
-			return errors.Wrap(err, "设置原创声明失败")
+			return "", errors.Wrap(err, "设置原创声明失败")
 		}
 		slog.Info("已声明原创")
 	}
 
 	// 绑定商品
 	if err := bindProducts(page, products); err != nil {
-		return errors.Wrap(err, "绑定商品失败")
+		return "", errors.Wrap(err, "绑定商品失败")
 	}
 
-	if err := clickPublishButton(page); err != nil {
-		return err
+	noteID, err := clickPublishButton(page)
+	if err != nil {
+		return "", err
 	}
 
-	time.Sleep(3 * time.Second)
+	return noteID, nil
+}
+
+// readEditorText 读取编辑器渲染文本（innerText，含段落换行）。
+func readEditorText(elem *rod.Element) (string, error) {
+	result, err := elem.Eval(`() => this.innerText || ""`)
+	if err != nil {
+		return "", err
+	}
+	return result.Value.Str(), nil
+}
+
+// normalizeForCompare 去掉零宽字符与所有空白后比较，忽略编辑器渲染层
+// 与入参之间合法的换行/空格差异。
+func normalizeForCompare(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '​' || r == '‌' || r == '‍' || r == ' ':
+			continue
+		case unicode.IsSpace(r):
+			continue
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// verifyEditorContent 回读正文编辑器内容与入参比对；不一致时清空重试一次。
+func verifyEditorContent(page *rod.Page, elem *rod.Element, expected string) error {
+	actual, err := readEditorText(elem)
+	if err != nil {
+		return errors.Wrap(err, "读取正文编辑器内容失败")
+	}
+	if normalizeForCompare(actual) == normalizeForCompare(expected) {
+		return nil
+	}
+	logrus.Warnf("正文输入校验不一致（第1次），清空重试; 编辑器长度=%d 期望=%d", len([]rune(actual)), len([]rune(expected)))
+	if err := humanReplaceText(page, elem, ""); err != nil {
+		return errors.Wrap(err, "清空正文编辑器失败")
+	}
+	humanPause(400*time.Millisecond, 800*time.Millisecond)
+	if err := humanClick(page, elem); err != nil {
+		return errors.Wrap(err, "重新聚焦正文编辑器失败")
+	}
+	if err := humanType(page, expected); err != nil {
+		return errors.Wrap(err, "重试输入正文失败")
+	}
+	actual, err = readEditorText(elem)
+	if err != nil {
+		return errors.Wrap(err, "重试后读取正文编辑器内容失败")
+	}
+	if normalizeForCompare(actual) != normalizeForCompare(expected) {
+		snippet := []rune(strings.ReplaceAll(strings.TrimSpace(actual), "\n", "\\n"))
+		if len(snippet) > 40 {
+			snippet = snippet[:40]
+		}
+		return errors.Errorf("正文输入校验失败: 编辑器内容与入参不一致（编辑器长度=%d 期望=%d 编辑器内容=%q），已中止发布", len([]rune(actual)), len([]rune(expected)), string(snippet))
+	}
+	slog.Info("正文输入校验：重试后通过")
+	return nil
+}
+
+// verifyTagsInput 校验每个话题标签都落进了编辑器（联想选项或纯文本均可）。
+func verifyTagsInput(contentElem *rod.Element, tags []string) error {
+	if len(tags) == 0 {
+		return nil
+	}
+	text, err := readEditorText(contentElem)
+	if err != nil {
+		return errors.Wrap(err, "读取正文编辑器内容失败")
+	}
+	normalized := normalizeForCompare(text)
+	for _, tag := range tags {
+		tag = strings.TrimLeft(tag, "#")
+		if !strings.Contains(normalized, tag) {
+			return errors.Errorf("话题输入校验失败: 标签[%s]未出现在编辑器中，已中止发布", tag)
+		}
+	}
 	return nil
 }
 
@@ -355,20 +452,48 @@ type publishButton struct {
 	isWidget bool
 }
 
-func clickPublishButton(page *rod.Page) error {
+func clickPublishButton(page *rod.Page) (string, error) {
 	btn, err := waitForPublishButtonClickable(page, 15*time.Second)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if btn.isWidget {
-		return clickPublishWidget(page, btn.elem)
+		if err := clickPublishWidget(page, btn.elem); err != nil {
+			return "", errors.Wrap(err, "点击发布按钮失败")
+		}
+	} else {
+		if err := humanClick(page, btn.elem); err != nil {
+			return "", errors.Wrap(err, "点击发布按钮失败")
+		}
 	}
+	// 点击发布后必须观察到成功信号才报成功：之前 sleep 3 秒就硬编码返回
+	// "发布完成"，发布失败（如正文被前端防护丢弃）也会被误报为成功。
+	return waitPublishSuccess(page, 30*time.Second)
+}
 
-	if err := humanClick(page, btn.elem); err != nil {
-		return errors.Wrap(err, "点击发布按钮失败")
+// waitPublishSuccess 轮询发布成功信号：页面离开发布页，或页面文本出现
+// "发布成功"提示。能从跳转后的 URL 提取笔记 ID 时一并返回。
+func waitPublishSuccess(page *rod.Page, maxWait time.Duration) (string, error) {
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		info, err := page.Info()
+		if err == nil && !strings.Contains(info.URL, "/publish/publish") {
+			if m := regexp.MustCompile(`(?:explore|discovery/item)/([0-9a-f]+)`).FindStringSubmatch(info.URL); len(m) > 1 {
+				slog.Info("发布成功：页面已跳转", "note_id", m[1])
+				return m[1], nil
+			}
+			slog.Info("发布成功：页面已跳转", "url", info.URL)
+			return "", nil
+		}
+		body, err := page.Eval(`() => document.body ? document.body.innerText.slice(0, 2000) : ""`)
+		if err == nil && strings.Contains(body.Value.Str(), "发布成功") {
+			slog.Info("发布成功：页面出现成功提示")
+			return "", nil
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
-	return nil
+	return "", errors.New("发布结果未确认: 点击发布按钮后未检测到成功信号（页面未跳转且未出现成功提示）")
 }
 
 // waitForPublishButtonClickable 等待新版 xhs-publish-btn 或旧版 button.bg-red 可点击。

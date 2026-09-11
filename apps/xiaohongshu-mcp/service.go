@@ -223,7 +223,8 @@ func (s *XiaohongshuService) PublishContent(ctx context.Context, req *PublishReq
 	}
 
 	// 执行发布
-	if err := s.publishContent(ctx, content); err != nil {
+	noteID, err := s.publishContent(ctx, content)
+	if err != nil {
 		logrus.Errorf("发布内容失败: title=%s %v", content.Title, err)
 		return nil, err
 	}
@@ -233,6 +234,7 @@ func (s *XiaohongshuService) PublishContent(ctx context.Context, req *PublishReq
 		Content: req.Content,
 		Images:  len(imagePaths),
 		Status:  "发布完成",
+		PostID:  noteID,
 	}
 
 	return response, nil
@@ -245,7 +247,7 @@ func (s *XiaohongshuService) processImages(images []string) ([]string, error) {
 }
 
 // publishContent 执行内容发布
-func (s *XiaohongshuService) publishContent(ctx context.Context, content xiaohongshu.PublishImageContent) error {
+func (s *XiaohongshuService) publishContent(ctx context.Context, content xiaohongshu.PublishImageContent) (string, error) {
 	b := newBrowser()
 	defer b.Close()
 
@@ -254,10 +256,10 @@ func (s *XiaohongshuService) publishContent(ctx context.Context, content xiaohon
 
 	action, err := xiaohongshu.NewPublishImageAction(page)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	// 执行发布
+	// 执行发布，返回发布后确认到的笔记 ID（可能为空）。
 	return action.Publish(ctx, content)
 }
 

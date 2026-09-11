@@ -1,1 +1,1 @@
-"""Windows desktop collector. wxauto is imported only by the live entry point."""
+"""Windows desktop collector. wechatauto-replica is imported only by the live entry points."""

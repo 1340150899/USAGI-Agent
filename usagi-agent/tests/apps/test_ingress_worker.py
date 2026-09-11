@@ -19,7 +19,7 @@ from usagi_httpserver.service import ApplicationService
 from usagi_httpserver.store import AppStore
 from usagi_httpserver.tool_specs import XHS_TOOL_SPECS
 from usagi_httpserver.wechat_worker import WeChatMaterialWorker
-from wechat_edge.spool import Spool, overlap
+from wechat_edge.spool import Spool
 
 from tests.tools.test_durable_approval import build
 from usagi_agent.prompts import WECHAT_MATERIAL_PROMPT
@@ -42,17 +42,19 @@ def test_candidate_pool_migrates_existing_event_rows(tmp_path):
         ('unconsumed',1),('consumed',2)]
 
 
-def test_observation_overlap_and_gap(tmp_path):
-    assert overlap(['a','b'],['b','c'])==1
-    assert overlap(['a','b'],['x','c']) is None
-    assert overlap(['a'],['a','a']) is None
-    assert overlap([],['first message'])==0
+def test_spool_upload_queue_semantics(tmp_path):
     spool=Spool()
-    config={'account_ref':'desktop'};conv={'ref':'chat','sender_ref':'contact'}
-    def msg(signature):return {'signature':signature,'sender_ref':'contact','direction':'incoming','text':signature}
-    spool.capture(config,conv,[msg('a'),msg('b')]);assert spool.pending()==[]
-    spool.capture(config,conv,[msg('b'),msg('c')]);assert len(spool.pending())==1
-    spool.capture(config,conv,[msg('x')]);assert json.loads(spool.pending()[-1][1])['source_gap']
+    spool.enqueue('chat:101',json.dumps({'source_event_ref':'chat:101'}))
+    spool.enqueue('chat:102',json.dumps({'source_event_ref':'chat:102'}))
+    # FIFO order is preserved (no loss, no reordering)
+    assert [event_id for event_id,_ in spool.pending()]==['chat:101','chat:102']
+    # Duplicate event ids are dropped (idempotent queue-level dedup)
+    spool.enqueue('chat:101',json.dumps({'source_event_ref':'chat:101'}))
+    assert len(spool.pending())==2
+    # ack removes exactly the acked event; unknown ids are harmless
+    spool.ack('chat:101');spool.ack('nonexistent')
+    assert [event_id for event_id,_ in spool.pending()]==['chat:102']
+    assert spool.size()==1
     assert not (tmp_path/'edge.db').exists()
 
 
