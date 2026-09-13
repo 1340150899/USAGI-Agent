@@ -1,4 +1,5 @@
 {
+  "log_dir": "log",
   "data_dir": ".usagi/edge",
   "server_url": "https://YOUR_LINUX_HOST",
   "token_env": "USAGI_WXAUTO_TOKEN",

@@ -3,12 +3,15 @@ import hashlib
 import json
 import os
 import tempfile
+import logging
 from pathlib import Path
 from typing import Literal
 
 from fastapi import Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
+
+log = logging.getLogger(__name__)
 
 
 class Part(BaseModel):
@@ -67,7 +70,10 @@ def install_ingress(app, service, authenticate):
             seq=store.accept(principal,binding['source'],
                              'material' if binding['source']=='wxauto' else 'interactive',event.model_dump())
         except ValueError as exc:
+            log.warning("ingress_event_rejected source=%s event_ref=%s reason=conflict", source, event.source_event_ref)
             raise HTTPException(409,str(exc)) from exc
+        log.info("ingress_event_accepted source=%s event_ref=%s seq=%s parts=%s",
+                 source, event.source_event_ref, seq, len(event.content_parts))
         return {'accepted':True,'accepted_seq':seq,'source_event_ref':event.source_event_ref}
 
     @app.post('/v1/ingress/media',status_code=201)
@@ -143,6 +149,7 @@ def install_ingress(app, service, authenticate):
         with store.db() as db:
             db.execute('INSERT OR REPLACE INTO heartbeat VALUES (?,?,?)',
                        (source,json.dumps(body),time.time()))
+        log.debug("adapter_heartbeat_received source=%s", source)
         return {'accepted':True}
 
     @app.post('/v1/conversations/{conversation_ref}/clear-gap')

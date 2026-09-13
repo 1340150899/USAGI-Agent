@@ -42,6 +42,7 @@ class WeChatMaterialWorker:
         self.scenario = "example.research_writer"
 
     async def run(self):
+        log.info("wechat_material_worker_initialized")
         self.store.recover_material_windows()
         while not self.stopping.is_set():
             await self.reconcile_selected_windows()
@@ -63,6 +64,7 @@ class WeChatMaterialWorker:
 
     async def execute(self, window):
         """Create a fresh research_writer Session without creating a job row."""
+        log.info("material_window_processing_started window_id=%s", window["id"])
         body = window["payload"]
         uid = str(self.settings.get("super_uid", "6"))
         image_parts, paths = await self._material_images(
@@ -85,6 +87,8 @@ class WeChatMaterialWorker:
             content_parts=image_parts,
         )
         result = await self.server.create_session(request, auth=material_auth(uid))
+        log.info("material_agent_result_received window_id=%s run_id=%s outcome=%s has_result=%s",
+                 window["id"], result.run_id, result.outcome.kind, bool(result.message))
         self.store.bind_session(uid, result.session_id)
         self.store.bind_material_window(
             window["id"], result.session_id, result.run_id
@@ -106,6 +110,9 @@ class WeChatMaterialWorker:
                 broadcast=True,
                 media_ids=self._draft_media_ids(result, media_ids),
             )
+            log.info("material_result_queued window_id=%s session_id=%s", window["id"], result.session_id)
+        else:
+            log.info("material_result_insufficient window_id=%s", window["id"])
 
     async def reconcile_selected_windows(self):
         """Settle material whose approval was resumed by the interaction service."""

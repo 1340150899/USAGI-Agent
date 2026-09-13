@@ -12,6 +12,7 @@ import logging
 import mimetypes
 import os
 import threading
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -26,12 +27,52 @@ REQUIRED_CONVERSATION_KEYS = ('name', 'ref', 'sender_ref')
 DEPRECATED_KEYS = ('wxauto_module', 'poll_seconds', 'self_name')
 
 
-def configure_logging():
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+class _LevelFileHandler(logging.Handler):
+    def __init__(self, directory, level):
+        super().__init__(level)
+        self.directory, self.exact_level = Path(directory), level
+
+    def emit(self, record):
+        if record.levelno != self.exact_level:
+            return
+        try:
+            self.directory.mkdir(parents=True, exist_ok=True)
+            day = datetime.fromtimestamp(record.created).astimezone().date().isoformat()
+            with (self.directory / f"{day}.{record.levelname.lower()}.log").open(
+                'a', encoding='utf-8'
+            ) as output:
+                output.write(self.format(record) + '\n')
+        except Exception:
+            self.handleError(record)
+
+
+def _log_root():
+    configured = os.environ.get('USAGI_LOG_DIR')
+    if configured:
+        return Path(configured).expanduser().resolve()
+    for candidate in (Path.cwd(), *Path(__file__).resolve().parents):
+        if (candidate / 'apps').is_dir() and (candidate / 'usagi-agent').is_dir():
+            return candidate / 'log'
+    return Path.cwd() / 'log'
+
+
+def configure_logging(log_root=None):
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s %(filename)s:%(lineno)d %(message)s"
+    )
     log.handlers.clear()
-    log.addHandler(handler)
-    log.setLevel(logging.INFO)
+    root = Path(log_root).expanduser() if log_root else _log_root()
+    if not root.is_absolute():
+        root = (_log_root().parent / root).resolve()
+    for level in (logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR, logging.CRITICAL):
+        handler = _LevelFileHandler(root / 'wechat-edge', level)
+        handler.setFormatter(formatter)
+        log.addHandler(handler)
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    console.setFormatter(formatter)
+    log.addHandler(console)
+    log.setLevel(logging.DEBUG)
     log.propagate = False
 
 
@@ -68,6 +109,7 @@ def init_db(config, stop):
     counts as failure — WeChatDB only warns on stderr in that case
     (wechatauto db.py sets ``db.unkeyed``)."""
     from wechatauto.db import WeChatDB
+    log.info('initialization_stage_started stage=wechat_database')
     while not stop.is_set():
         try:
             db = WeChatDB(account=config.get('account') or None,
@@ -76,6 +118,7 @@ def init_db(config, stop):
                         if _is_critical_db(rel)]
             if critical:
                 raise RuntimeError('unkeyed databases: ' + ', '.join(critical))
+            log.info('initialization_stage_completed stage=wechat_database critical_databases_keyed=true')
             return db
         except Exception as exc:
             config['_status'] = 'initialization_failed:' + type(exc).__name__
@@ -109,6 +152,8 @@ def make_callback(db, media, spool, config, conversation):
         item = classify(msg, conversation, db.wxid)
         if item is None:
             return
+        log.info('message_captured event_ref=%s kind=%s',
+                 event_ref(msg['username'], msg['sort_seq']), item['kind'])
         image_path = None
         if item['kind'] == 'image':
             path, tier = media.download(msg['username'], msg['local_id'],
@@ -143,9 +188,12 @@ def upload_loop(spool, config, stop):
                         result.raise_for_status()
                         body['content_parts'].append({'type': 'image', 'media_id': result.json()['media_id']})
                     response = client.post('/v1/ingress/events', json=body); response.raise_for_status()
+                    log.info('message_sent event_ref=%s status=%s', event_id, response.status_code)
                     spool.ack(event_id)
                     log.info("发送了消息")
-                except (httpx.HTTPError, OSError):
+                except (httpx.HTTPError, OSError) as exc:
+                    log.exception('message_send_failed event_ref=%s error_type=%s',
+                                  event_id, type(exc).__name__)
                     break
             try:
                 client.post('/v1/adapters/heartbeat', json={
@@ -183,27 +231,39 @@ def main():
     parser.add_argument('--config', required=True)
     args = parser.parse_args()
     configure_logging()
+    log.info('initialization_stage_started stage=config')
     config = load_config(args.config)
+    if config.get('log_dir'):
+        configure_logging(config['log_dir'])
+    log.info('initialization_stage_completed stage=config')
     root = Path(config.get('data_dir', '.usagi/edge')).resolve(); root.mkdir(parents=True, exist_ok=True)
+    log.info('initialization_stage_completed stage=data_directory path=%s', root)
     spool = Spool()
+    log.info('initialization_stage_completed stage=spool')
     stop = threading.Event()
     listener = None
     worker = threading.Thread(target=upload_loop, args=(spool, config, stop), daemon=True); worker.start()
+    log.info('initialization_stage_completed stage=upload_worker')
     try:
         db = init_db(config, stop)
         if db is None:
             return
         conversations = resolve_conversations(db, config)
+        log.info('initialization_stage_completed stage=conversations count=%d', len(conversations))
         from .images import EdgeMediaDownloader
         from wechatauto.db import Listener
         media = EdgeMediaDownloader(db, root / 'images')
         config['_status'] = 'detecting_image_key'
+        log.info('initialization_stage_started stage=image_aes_key_detection')
         media.refresh_keys()
+        log.info('initialization_stage_completed stage=image_aes_key_detection key_found=%s', media.has_keys)
         listener = Listener(db, interval=float(config.get('interval_seconds', 1.0)))
+        log.info('initialization_stage_completed stage=listener_created')
         for conversation in conversations:
             listener.add_listener(conversation['username'],
                                   make_callback(db, media, spool, config, conversation))
         listener.start()
+        log.info('initialization_stage_completed stage=listener_started')
         config['_status'] = 'observing'
         log.info('listening on %d conversation(s)', len(conversations))
         probe = threading.Thread(target=watchdog, args=(db, config, stop), daemon=True); probe.start()
@@ -211,7 +271,11 @@ def main():
             stop.wait(5)
     except KeyboardInterrupt:
         pass
+    except Exception as exc:
+        log.exception('wechat_edge_fatal error_type=%s', type(exc).__name__)
+        raise
     finally:
+        log.info('wechat_edge_shutdown_started')
         stop.set()
         if listener is not None:
             try:
@@ -219,6 +283,7 @@ def main():
             except Exception:
                 pass
         worker.join(timeout=35)
+        log.info('wechat_edge_shutdown_complete')
 
 
 if __name__ == '__main__':

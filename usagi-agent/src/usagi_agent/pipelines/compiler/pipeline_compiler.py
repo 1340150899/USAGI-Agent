@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from itertools import pairwise
+import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.runnables import RunnableConfig
@@ -20,6 +22,7 @@ if TYPE_CHECKING:
     from usagi_agent.server.runtime import ServerRuntime
 
 StageProcess = Callable[[AgentRunState, RunContext], Awaitable[PipelineStagePatch]]
+log = logging.getLogger(__name__)
 
 
 def _wrap_stage(
@@ -32,30 +35,33 @@ def _wrap_stage(
 ) -> Callable[..., Awaitable[dict]]:
     async def node(state: AgentRunState, config: RunnableConfig) -> dict:
         context = RunContext.from_graph_config(config)
+        started = time.monotonic()
+        log.info("pipeline_stage_started run_id=%s stage=%s", context.run_id, stage_name)
         configurable = config.get("configurable", {})
-        with operation(
-            runtime.observability,
-            "pipeline.stage",
-            **{
-                "usagi.pipeline.stage.name": stage_name,
-                "usagi.scenario.name": scenario_key,
-            },
-        ) as telemetry:
-            components = runtime.kernel_components
-            if components is not None:
-                await components.middleware.before_node(
-                    context.run_id,
-                    context.tenant_id,
-                    configurable.get("fencing_gate"),
-                    context.deadline,
-                    budget,
-                )
-            result = await process(state, context)
-            disposition = (
-                result.get("pass_disposition") if isinstance(result, dict) else None
-            )
-            if disposition == "run_failed":
-                telemetry.set_outcome("failed")
+        try:
+            with operation(
+                runtime.observability,
+                "pipeline.stage",
+                **{
+                    "usagi.pipeline.stage.name": stage_name,
+                    "usagi.pipeline.iteration": state.get("iteration", 0) + 1,
+                    "usagi.scenario.name": scenario_key,
+                },
+            ) as telemetry:
+                components = runtime.kernel_components
+                if components is not None:
+                    await components.middleware.before_node(
+                        context.run_id, context.tenant_id,
+                        configurable.get("fencing_gate"), context.deadline, budget,
+                    )
+                result = await process(state, context)
+                disposition = result.get("pass_disposition") if isinstance(result, dict) else None
+                if disposition == "run_failed":
+                    telemetry.set_outcome("failed")
+        except Exception as exc:
+            log.exception("pipeline_stage_failed run_id=%s stage=%s error_type=%s", context.run_id, stage_name, type(exc).__name__)
+            raise
+        log.info("pipeline_stage_completed run_id=%s stage=%s duration_ms=%.3f", context.run_id, stage_name, (time.monotonic() - started) * 1000)
         if not isinstance(result, dict):
             raise TypeError("pipeline stage must return dict")
         return dict(result)

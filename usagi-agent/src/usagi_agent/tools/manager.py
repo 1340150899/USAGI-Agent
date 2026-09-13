@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from collections.abc import Iterable
 from contextlib import suppress
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
     from usagi_agent.tools.mcp import MCPServerConfig
 
 _SETTLED = ("settled_success", "settled_failure")
+log = logging.getLogger(__name__)
 
 
 class ToolManager:
@@ -161,14 +163,30 @@ class ToolManager:
         approval_result: dict | None = None,
     ) -> ToolObservation:
         started = time.monotonic()
+        log.info("tool_call_started run_id=%s tool=%s", context.execution.control_id, name)
+
+        def finish(observation: ToolObservation) -> ToolObservation:
+            level = logging.INFO if observation.status == "success" else logging.ERROR
+            log.log(
+                level,
+                "tool_call_completed run_id=%s tool=%s status=%s "
+                "duration_ms=%.3f error_code=%s",
+                context.execution.control_id,
+                name,
+                observation.status,
+                (time.monotonic() - started) * 1000,
+                observation.error_code,
+            )
+            return observation
+
         try:
             adapter = self.resolve(name)
         except UnknownToolError:
-            return self._observation(
+            return finish(self._observation(
                 name, tool_call_id, started, "failed",
                 error_code="tool.execution_failed",
                 error_message=f"unknown tool: {name}",
-            )
+            ))
         spec = adapter.spec
 
         missing = [
@@ -177,19 +195,19 @@ class ToolManager:
             if scope not in context.execution.authorization_scope
         ]
         if missing:
-            return self._observation(
+            return finish(self._observation(
                 name, tool_call_id, started, "denied",
                 error_code="tool.denied",
                 error_message=f"missing required scopes: {', '.join(missing)}",
-            )
+            ))
 
         invalid = validate_arguments(spec.parameters, arguments)
         if invalid is not None:
-            return self._observation(
+            return finish(self._observation(
                 name, tool_call_id, started, "failed",
                 error_code="tool.invalid_arguments",
                 error_message=invalid,
-            )
+            ))
 
         execution_id = operation_id or self._execution_id(name, context, tool_call_id)
         if spec.requires_approval:
@@ -198,34 +216,34 @@ class ToolManager:
                 approval_result=approval_result,
             )
             if not allowed:
-                return self._observation(
+                return finish(self._observation(
                     name, tool_call_id, started, "denied", error_code="tool.denied",
                     error_message="tool approval missing, rejected, or expired",
-                )
+                ))
         if self._execution_store is not None:
             replayed = await self._replay_settled(execution_id)
             if replayed is not None:
-                return replayed
+                return finish(replayed)
             reserved = await self._reserve(execution_id, name, spec, context)
             if reserved is None:
                 # The record exists in a non-settled state (concurrent execution
                 # or an unrecovered crash); the side effect's absence cannot be
                 # assumed.
-                return self._observation(
+                return finish(self._observation(
                     name, tool_call_id, started, "unknown",
                     error_code="tool.unknown",
                     error_message="execution record is already reserved or executing",
-                )
+                ))
             try:
                 await self._execution_store.cas_execution_status(
                     execution_id, expected="reserved", new="executing"
                 )
             except CASMismatch:
-                return self._observation(
+                return finish(self._observation(
                     name, tool_call_id, started, "unknown",
                     error_code="tool.unknown",
                     error_message="execution record state changed concurrently",
-                )
+                ))
 
         outcome = await self._execute_with_budget(adapter, spec, arguments, context)
         result = outcome[1]
@@ -241,7 +259,7 @@ class ToolManager:
             error_message=outcome[3],
         )
         await self._settle(execution_id, observation)
-        return observation
+        return finish(observation)
 
     async def _execute_with_budget(
         self,

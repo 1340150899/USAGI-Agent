@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +16,7 @@ from opentelemetry import metrics, trace
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 from opentelemetry.trace import Status, StatusCode
 
@@ -33,6 +37,8 @@ SPAN_NAMES = frozenset(
         "tool.execute",
         "policy.evaluate",
         "memory.recall",
+        "agent.request",
+        "service.lifecycle",
     }
 )
 
@@ -57,6 +63,47 @@ _FORBIDDEN_ATTR_KEYS = frozenset(
 )
 _GLOBAL_PROVIDER_LOCK = Lock()
 _GLOBAL_PROVIDER_CONFIGURED = False
+
+
+class JsonlSpanExporter(SpanExporter):
+    """Persist completed spans as one JSON object per line for local diagnosis."""
+
+    def __init__(self, directory: Path) -> None:
+        self.directory = directory
+
+    def export(self, spans) -> SpanExportResult:
+        try:
+            self.directory.mkdir(parents=True, exist_ok=True)
+            for item in spans:
+                ended = item.end_time or item.start_time
+                day = datetime.fromtimestamp(
+                    ended / 1_000_000_000, timezone.utc
+                ).astimezone().date().isoformat()
+                context = item.context
+                parent = item.parent
+                record = {
+                    "trace_id": f"{context.trace_id:032x}",
+                    "span_id": f"{context.span_id:016x}",
+                    "parent_span_id": f"{parent.span_id:016x}" if parent else None,
+                    "name": item.name,
+                    "start_time": datetime.fromtimestamp(
+                        item.start_time / 1_000_000_000, timezone.utc
+                    ).isoformat(),
+                    "end_time": datetime.fromtimestamp(
+                        ended / 1_000_000_000, timezone.utc
+                    ).isoformat(),
+                    "duration_ms": round((ended - item.start_time) / 1_000_000, 3),
+                    "status": item.status.status_code.name.lower(),
+                    "attributes": dict(item.attributes or {}),
+                    "resource": dict(item.resource.attributes or {}),
+                }
+                with (self.directory / f"{day}.spans.jsonl").open(
+                    "a", encoding="utf-8"
+                ) as output:
+                    output.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+            return SpanExportResult.SUCCESS
+        except Exception:
+            return SpanExportResult.FAILURE
 
 
 def _scrub_attributes(attrs: dict[str, Any]) -> dict[str, Any]:
@@ -221,6 +268,18 @@ class ObservabilityInitializer:
         )
         sampler = ParentBased(TraceIdRatioBased(settings.otel_trace_sample_ratio))
         tracer_provider = TracerProvider(resource=resource, sampler=sampler)
+        if settings.span_file_exporter:
+            from usagi_agent.observability.file_logging import default_log_root
+
+            configured = Path(settings.log_dir).expanduser() if settings.log_dir else None
+            root = (
+                configured.resolve() if configured and configured.is_absolute()
+                else (default_log_root().parent / configured).resolve() if configured
+                else default_log_root()
+            )
+            tracer_provider.add_span_processor(
+                SimpleSpanProcessor(JsonlSpanExporter(root / "agent-framework" / "spans"))
+            )
         readers: list[Any] = []
         exporter = "otlp" if settings.otel_endpoint else settings.otel_exporter
 
@@ -253,7 +312,6 @@ class ObservabilityInitializer:
             )
             from opentelemetry.sdk.trace.export import (
                 ConsoleSpanExporter,
-                SimpleSpanProcessor,
             )
 
             tracer_provider.add_span_processor(

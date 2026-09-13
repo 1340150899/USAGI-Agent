@@ -15,6 +15,7 @@ from usagi_agent.observability.telemetry import (
     operation,
     span,
 )
+from usagi_agent.observability.file_logging import configure_service_logging, default_log_root
 
 __all__ = [
     "ObservabilityInitializer",
@@ -25,4 +26,6 @@ __all__ = [
     "metric_up_down_counter",
     "operation",
     "span",
+    "configure_service_logging",
+    "default_log_root",
 ]

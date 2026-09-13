@@ -1,12 +1,14 @@
 """Construct service resources without loading any business scenario."""
 from __future__ import annotations
 
+import logging
+
 from usagi_agent.agents import AgentManagerInitializer
 from usagi_agent.erasure import ErasureInitializer
 from usagi_agent.kernel import KernelInitializer
 from usagi_agent.memory.manager import DefaultMemoryManager
 from usagi_agent.memory.store import MemoryStores
-from usagi_agent.observability import ObservabilityInitializer
+from usagi_agent.observability import ObservabilityInitializer, configure_service_logging, operation
 from usagi_agent.persistence.backend import PersistenceInitializer
 from usagi_agent.pipelines.compiler import PipelineCompiler
 from usagi_agent.policies.engine import DefaultGuardrail, DefaultPolicyEngine
@@ -19,6 +21,9 @@ from usagi_agent.tools import ToolInitializer
 class ServiceRuntimeInitializer:
     @staticmethod
     def init(settings, *, tool_specs=None) -> ServerRuntime:
+        configure_service_logging("agent-framework", ("usagi_agent",), log_root=settings.log_dir)
+        log = logging.getLogger(__name__)
+        log.info("agent_framework_initialization_started")
         settings.require_durable()
         observability = ObservabilityInitializer.init(settings)
         persistence = PersistenceInitializer.init(settings, observability)
@@ -35,7 +40,7 @@ class ServiceRuntimeInitializer:
         agent_manager = AgentManagerInitializer.init(settings)
         session_manager = SessionManager(persistence.session_store)
         
-        return ServerRuntime(
+        runtime = ServerRuntime(
             settings=settings,
             observability=observability,
             persistence=persistence,
@@ -50,3 +55,10 @@ class ServiceRuntimeInitializer:
             erasure_coordinator=erasure,
             kernel_components=kernel_components,
         )
+        with operation(
+            observability, "service.lifecycle",
+            **{"usagi.lifecycle.phase": "initialized"},
+        ):
+            pass
+        log.info("agent_framework_initialization_complete")
+        return runtime

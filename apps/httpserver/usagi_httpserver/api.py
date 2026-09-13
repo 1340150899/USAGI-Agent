@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hmac
 import asyncio
+import logging
+import time
 from contextlib import suppress
 from contextlib import asynccontextmanager
 
@@ -13,6 +15,8 @@ from usagi_agent.api.errors import PolicyDeniedError
 from usagi_agent.kernel import AuthContext
 from usagi_agent.types.refs import PrincipalRef
 from usagi_agent.types.run import RunStartRequest
+
+log = logging.getLogger(__name__)
 
 
 class MessageRequest(BaseModel):
@@ -60,6 +64,25 @@ def create_app(server, *, credentials: dict[str, str], scenario_key: str,
                 await server.shutdown()
 
     app = FastAPI(title="USAGI application API", lifespan=lifespan)
+
+    @app.middleware("http")
+    async def log_request(request: Request, call_next):
+        started = time.monotonic()
+        log.info("http_request_received method=%s path=%s", request.method, request.url.path)
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            log.exception(
+                "http_request_failed method=%s path=%s duration_ms=%.3f error_type=%s",
+                request.method, request.url.path, (time.monotonic() - started) * 1000,
+                type(exc).__name__,
+            )
+            raise
+        level = logging.INFO if response.status_code < 400 else logging.WARNING
+        log.log(level, "http_request_completed method=%s path=%s status=%s duration_ms=%.3f",
+                request.method, request.url.path, response.status_code,
+                (time.monotonic() - started) * 1000)
+        return response
 
     def authenticate(request: Request, authorization: str = Header(default="")) -> AuthContext:
         supplied = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""

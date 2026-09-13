@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 import uvicorn
+from usagi_agent.observability import configure_service_logging
 from .api import create_app
 from .bootstrap import build_server
 from .service import ApplicationService
@@ -17,6 +18,15 @@ async def main():
     parser.add_argument("--config", required=True)
     args=parser.parse_args()
     settings=json.loads(Path(args.config).read_text(encoding="utf-8"))
+    log_dir=settings.get("log_dir")
+    configure_service_logging(
+        "http-server",
+        ("usagi_httpserver", "uvicorn", "uvicorn.error", "uvicorn.access"),
+        log_root=log_dir,
+    )
+    configure_service_logging("agent-framework", ("usagi_agent",), log_root=log_dir)
+    import logging
+    logging.getLogger("usagi_httpserver").info("http_server_initialization_started")
     data=Path(settings.get("data_dir",".usagi/http")).resolve()
     data.mkdir(parents=True,exist_ok=True)
     # Keep one worker owner per deployment; SQLite still serializes Store CAS.
@@ -40,6 +50,9 @@ async def main():
         adapter=settings["weixin_adapter"]
         adapter["token"]=os.environ[adapter.pop("token_env")]
     server=await build_server(xhs_url=settings.get("xhs_url"),settings=settings)
+    logging.getLogger("usagi_httpserver").info(
+        "http_server_agent_initialized ready=%s", server.ready
+    )
     stores={
         "dev":AppStore(data/"application-dev.db"),
         "debug":AppStore(data/"application-debug.db"),
@@ -54,7 +67,16 @@ async def main():
         await uvicorn.Server(uvicorn.Config(app,host=settings.get("host","127.0.0.1"),
                                            port=settings.get("port",8080))).serve()
     finally:
+        logging.getLogger("usagi_httpserver").info("http_server_shutdown_complete")
         lock.close()
 
 
-if __name__=="__main__":asyncio.run(main())
+if __name__=="__main__":
+    try:
+        asyncio.run(main())
+    except Exception as exc:
+        import logging
+        logging.getLogger("usagi_httpserver").exception(
+            "http_server_fatal error_type=%s", type(exc).__name__
+        )
+        raise

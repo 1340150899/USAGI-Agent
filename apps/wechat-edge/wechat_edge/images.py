@@ -63,6 +63,11 @@ class EdgeMediaDownloader(MediaDownloader):
             log.warning("no image AES key; image collection degrades to placeholders")
         return self._keys
 
+    @property
+    def has_keys(self) -> bool:
+        """Report key availability without exposing either secret key value."""
+        return self._keys is not None
+
     def _explicit(self) -> dict:
         if not self._keys:
             return {}

@@ -1,4 +1,5 @@
 {
+  "log_dir": "log",
   "data_dir": ".usagi/weixin",
   "account_ref": "weixin-main",
   "database_environment": "debug",

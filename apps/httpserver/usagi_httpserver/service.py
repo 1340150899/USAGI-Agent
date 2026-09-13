@@ -37,6 +37,7 @@ class ApplicationService:
         self.stopping = asyncio.Event()
 
     async def run(self):
+        log.info("application_worker_initialized")
         self.store.recover()
         while not self.stopping.is_set():
             self.store.collect(
@@ -60,6 +61,7 @@ class ApplicationService:
 
     async def execute(self, job):
         """Resolve a session and leave conversation/approval logic to USAGI."""
+        log.info("agent_job_processing_started job_id=%s", job["id"])
         body = json.loads(job["payload"])
         route = body.get("reply_route_ref") or self.settings.get("reply_routes", {}).get(job["principal"])
         ref_msg_id = body.get("ref_msg_id")
@@ -121,6 +123,8 @@ class ApplicationService:
         else:
             result = await self.server.create_session(request, auth=auth)
             session_id = result.session_id
+        log.info("agent_job_result_received job_id=%s run_id=%s outcome=%s has_result=%s",
+                 job["id"], result.run_id, result.outcome.kind, bool(result.message))
         self.store.bind_session(uid, session_id)
         self.store.record_session_media(session_id, media_ids)
         self.store.record_session_run(session_id, result.run_id)
@@ -161,6 +165,7 @@ class ApplicationService:
                 for record in self.store.pending_deliveries():
                     payload = json.loads(record["payload"])
                     if not payload.get("reply_route_ref") and not payload.get("broadcast"):
+                        log.warning("adapter_forward_unroutable delivery_id=%s", record["id"])
                         self.store.delivery_status(record["id"], "unroutable")
                         continue
                     try:
@@ -179,6 +184,10 @@ class ApplicationService:
                             record["id"], payload.get("session_id"), result.get("messages", []), status
                         )
                         self.store.delivery_status(record["id"], "mapped" if complete else status)
-                    except httpx.HTTPError:
+                        log.info("adapter_forward_completed delivery_id=%s endpoint=%s status=%s mapped=%s",
+                                 record["id"], endpoint, status, complete)
+                    except httpx.HTTPError as exc:
+                        log.exception("adapter_forward_failed delivery_id=%s error_type=%s",
+                                      record["id"], type(exc).__name__)
                         self.store.delivery_status(record["id"], record["status"])
                 await asyncio.sleep(1)

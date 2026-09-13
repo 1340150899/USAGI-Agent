@@ -9,8 +9,19 @@ import {startWeixinLoginWithQr,waitForWeixinLogin,displayQRCode} from './weixin/
 import {downloadMediaFromItem} from './weixin/media/media-download.js';
 import {generateClientId,sendMessageWeixin} from './weixin/messaging/send.js';
 import {sendWeixinMediaFile} from './weixin/messaging/send-media.js';
+import {configureLogger,logger} from './weixin/util/logger.js';
 
 const config=JSON.parse(fs.readFileSync(process.env.USAGI_WEIXIN_CONFIG ?? 'config.json','utf8'));
+configureLogger(config.log_dir);
+logger.info('adapter_initialization_started');
+process.on('uncaughtException',error=>{
+  logger.error(`adapter_fatal type=uncaughtException error=${JSON.stringify(safeDeliveryError(error))}`);
+  process.exit(1);
+});
+process.on('unhandledRejection',error=>{
+  logger.error(`adapter_fatal type=unhandledRejection error=${JSON.stringify(safeDeliveryError(error))}`);
+  process.exit(1);
+});
 config.apiToken=process.env[config.api_token_env ?? 'USAGI_ADAPTER_TOKEN'];
 config.serverToken=process.env[config.server_token_env ?? 'USAGI_WEIXIN_TOKEN'];
 if(!config.apiToken || config.apiToken.length<24 || !config.serverToken)throw new Error('configure adapter/server credentials');
@@ -33,6 +44,7 @@ const databaseEnvironment=config.database_environment??'dev';
 if(databaseEnvironment!=='dev' && databaseEnvironment!=='debug')throw new Error('database_environment must be dev or debug');
 const store=stores[databaseEnvironment as 'dev'|'debug'];
 store.recover();
+logger.info(`adapter_store_initialized environment=${databaseEnvironment}`);
 const accountRef=config.account_ref ?? 'weixin-main';
 const baseUrl=config.base_url ?? 'https://ilinkai.weixin.qq.com';
 const cdnBaseUrl=config.cdn_base_url ?? 'https://novac2c.cdn.weixin.qq.com/c2c';
@@ -43,6 +55,7 @@ if(legacyAccount && !Object.keys(accounts).length) {
   store.set('accounts',accounts);
 }
 configureAccounts(accounts);
+logger.info(`adapter_accounts_initialized success=true connections=${Object.keys(accounts).length}`);
 const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 
 function safeDeliveryError(error:unknown) {
@@ -115,10 +128,15 @@ async function poll() {
       }
       store.batch(accountId,response);
       store.set('last_poll',Date.now());
-    } catch {store.set('last_poll_error',Date.now());await sleep(3000);}
+    } catch(error) {
+      store.set('last_poll_error',Date.now());
+      logger.error(`message_poll_failed account_ref=${accountId} error=${JSON.stringify(safeDeliveryError(error))}`);
+      await sleep(3000);
+    }
    }
   };
   const entries=Object.entries(accounts);
+  logger.info(`adapter_poll_initialized connections=${entries.length}`);
   if(!entries.length) {
     while(alive)await sleep(1000);
     return;
@@ -137,6 +155,7 @@ async function forward() {
     for(const row of store.pending()) {
       try {
         const {account:connectionId,msg}=JSON.parse(row.payload);
+        logger.info(`message_received event_id=${row.id} item_count=${msg.item_list?.length??0}`);
         const allowed=config.allowed_peers;
         if(msg.message_type!==1 || (Array.isArray(allowed) && !allowed.includes(msg.from_user_id))){store.ack(row.id);continue;}
         store.bindUser(msg.from_user_id);
@@ -165,12 +184,17 @@ async function forward() {
           occurred_at:new Date(msg.create_time_ms??0).toISOString(),content_parts:parts};
         await api('/v1/ingress/events',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(event)});
         store.ack(row.id);
-      } catch {break;}
+        logger.info(`message_forwarded event_id=${row.id} success=true`);
+      } catch(error) {
+        logger.error(`message_forward_failed event_id=${row.id} error=${JSON.stringify(safeDeliveryError(error))}`);
+        break;
+      }
     }
     await sleep(500);
   }
 }
 async function sendDelivery(deliveryId:string,payload:any) {
+  logger.info(`delivery_received delivery_id=${deliveryId} broadcast=${Boolean(payload.broadcast)}`);
   if(store.claim(deliveryId)) {
       const targets=payload.broadcast?store.routes().map(item=>({routeRef:item.routeRef,route:item})):
         [{routeRef:payload.reply_route_ref,route:store.get('route:'+payload.reply_route_ref)}];
@@ -225,18 +249,17 @@ async function sendDelivery(deliveryId:string,payload:any) {
             } finally {try{fs.unlinkSync(filePath);}catch{}}
           }
           successfulTargets++;
+          logger.info(`message_sent delivery_id=${deliveryId} target_index=${targetIndex} success=true`);
         } catch(error) {
           failedTargets++;
-          console.error(JSON.stringify({timestamp:new Date().toISOString(),level:'error',
-            event:'delivery_target_unknown',delivery_id:deliveryId,target_index:targetIndex,
+          logger.error(JSON.stringify({event:'delivery_target_unknown',delivery_id:deliveryId,target_index:targetIndex,
             phase,error:safeDeliveryError(error)}));
         }
       }
       const status=failedTargets===0?'sent':
         successfulTargets>0 || successfulOperations>0?'partial':'unknown';
       if(failedTargets>0) {
-        console.error(JSON.stringify({timestamp:new Date().toISOString(),level:'error',
-          event:'delivery_incomplete',delivery_id:deliveryId,status,
+        logger.error(JSON.stringify({event:'delivery_incomplete',delivery_id:deliveryId,status,
           target_count:targets.length,successful_targets:successfulTargets,failed_targets:failedTargets}));
       }
       store.status(deliveryId,status);
@@ -253,7 +276,8 @@ async function heartbeat() {
   while(alive) {
     try {await api('/v1/adapters/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({logged_in:Object.keys(accounts).length>0,connections:Object.keys(accounts).length,
-        last_poll:store.get('last_poll'),last_poll_error:store.get('last_poll_error'),pending:store.pending().length})});}catch {}
+        last_poll:store.get('last_poll'),last_poll_error:store.get('last_poll_error'),pending:store.pending().length})});}
+    catch(error) {logger.warn(`heartbeat_failed error=${JSON.stringify(safeDeliveryError(error))}`);}
     for(let i=0;i<20 && alive;i++)await sleep(500);
   }
 }
@@ -288,10 +312,17 @@ const server=http.createServer(async(req,res)=>{
       respond(200,await sendDelivery(payload.delivery_id,payload));return;
     }
     respond(404,{error:'not found'});
-  }catch {respond(409,{error:'invalid or conflicting request'});}
+  }catch(error) {
+    logger.error(`adapter_http_request_failed method=${req.method} path=${req.url} error=${JSON.stringify(safeDeliveryError(error))}`);
+    respond(409,{error:'invalid or conflicting request'});
+  }
 });
 server.listen(config.port??8090,config.host??'127.0.0.1');
-for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{alive=false;abort.abort();server.close();});
+logger.info(`adapter_initialized success=true host=${config.host??'127.0.0.1'} port=${config.port??8090}`);
+for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{
+  logger.info(`adapter_shutdown_started signal=${signal}`);alive=false;abort.abort();server.close();
+});
 await Promise.all([poll(),forward(),heartbeat()]);
 store.db.close();
 for(const candidate of Object.values(stores))if(candidate!==store)candidate.db.close();
+logger.info('adapter_shutdown_complete');

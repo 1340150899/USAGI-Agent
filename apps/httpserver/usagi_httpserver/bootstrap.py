@@ -31,6 +31,8 @@ def _bootstrap_settings(settings: dict, data: Path, key: str) -> BootstrapSettin
         otel_metric_export_interval_millis=settings.get(
             "otel_metric_export_interval_millis", 60_000
         ),
+        log_dir=settings.get("log_dir"),
+        span_file_exporter=settings.get("span_file_exporter", True),
     )
 
 

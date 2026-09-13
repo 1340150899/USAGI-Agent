@@ -45,6 +45,10 @@ class BootstrapSettings(BaseModel):
     )
     otel_trace_sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
     otel_metric_export_interval_millis: int = Field(default=60_000, ge=1_000)
+    log_dir: str | None = Field(
+        default=None, description="Root directory for service logs and local span JSONL files."
+    )
+    span_file_exporter: bool = True
 
     # --- Encryption / attestation (§24.4, §16) ---
     encryption_kek_ref: str | None = Field(
