@@ -1,4 +1,4 @@
-"""Model-facing rendering of tool observations (design §21.6).
+"""Model-facing rendering of tool observations.
 
 The model sees status plus business output or a safe reason — never latency,
 receipt refs, artifact refs or raw exception text. Audit fields stay in the

@@ -1,7 +1,7 @@
 """ResultProcess stage: form AgentActions, then run the rule chain.
 
 The stage's fixed logic interprets the model response and persists one
-artifact per proposed action (design §19); rules then react to the formed
+artifact per proposed action; rules then react to the formed
 action — the framework ships ToolExecutionRule (governed execution) and
 CompactionApplyRule (memory mutation). Rules receive an immutable snapshot
 of the formation result and run serially, which keeps the contract

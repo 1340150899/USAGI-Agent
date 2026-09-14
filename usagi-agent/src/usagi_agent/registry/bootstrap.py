@@ -1,4 +1,4 @@
-"""Bootstrap settings (design §2.3, §16).
+"""Bootstrap settings.
 
 Only deployment values the program genuinely cannot derive are admitted here. Tunable
 behavior (retry counts, thresholds, budgets, rule structure, prompt, model selection)
@@ -17,11 +17,11 @@ class BootstrapSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # --- Identity / tenancy (§2.3: single tenant, fixed non-null value) ---
+    # --- Identity / tenancy ---
     tenant_id: str = Field(default="default", description="Single-tenant id; never NULL.")
     resume_hmac_key: SecretStr | None = None
 
-    # --- Persistence backend selection (§24.1: dev=InMemory, durable=SQLite) ---
+    # --- Persistence backend selection ---
     sqlite_path: str | None = Field(
         default=None, description="Path to a single shared SQLite DB (all Stores co-located)."
     )
@@ -33,7 +33,7 @@ class BootstrapSettings(BaseModel):
     # --- Model execution: live is the production path; scripted is deterministic. ---
     model_execution_mode: Literal["live", "scripted"] = "live"
 
-    # --- Observability (§25) ---
+    # --- Observability ---
     service_name: str = "usagi-agent"
     service_version: str = "0.1.0"
     service_instance_id: str = "usagi-agent-1"
@@ -50,13 +50,13 @@ class BootstrapSettings(BaseModel):
     )
     span_file_exporter: bool = True
 
-    # --- Encryption / attestation (§24.4, §16) ---
+    # --- Encryption / attestation ---
     encryption_kek_ref: str | None = Field(
         default=None, description="KEK SecretRef that wraps per-scope DEKs."
     )
     deployment_attestation_ref: str | None = Field(
         default=None,
-        description="Signed DeploymentAttestationRef for integration/real external Gate (§15).",
+        description="Signed DeploymentAttestationRef for integration/real external Gate.",
     )
 
     def require_durable(self) -> None:

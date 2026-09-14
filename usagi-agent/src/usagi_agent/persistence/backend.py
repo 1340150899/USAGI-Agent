@@ -1,4 +1,4 @@
-"""SQLite persistence initialization (design §24.1, §7.1 step1).
+"""SQLite persistence initialization.
 
 ``PersistenceInitializer`` is the second node of the init tree (after observability). It
 constructs an :class:`InfrastructurePorts` bundle backed by one SQLite database.
@@ -112,7 +112,7 @@ class InfrastructurePorts:
 def make_run_gate_verifier(run_control_store: RunControlStore) -> GateVerifier:
     """Build the async gate verifier the FencedCheckpointer calls on every write.
 
-    Verifies (§10.6): status in (running, resume_accepted), lease_owner matches,
+    Verifies: status in (running, resume_accepted), lease_owner matches,
     DB-clock expiry not passed, fencing token matches the live RunControl record.
     """
 
@@ -166,7 +166,7 @@ class PersistenceInitializer:
     @staticmethod
     def _build_sqlite(settings) -> InfrastructurePorts:
         # Durable checkpointer + RunControlStore share one DB so the gate the checkpointer
-        # verifies (SQL) reads authoritative rows written by the store (§10.6, §2.3).
+        # verifies (SQL) reads authoritative rows written by the store.
         from usagi_agent.persistence.sqlite.fenced_checkpointer import SqliteFencedCheckpointer
         from usagi_agent.persistence.sqlite.run_control_store import SqliteRunControlStore
         from usagi_agent.persistence.sqlite.session_store import SqliteSessionStore

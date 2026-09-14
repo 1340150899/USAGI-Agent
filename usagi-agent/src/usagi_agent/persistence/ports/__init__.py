@@ -1,4 +1,4 @@
-"""Persistence Port surface (design §24.1).
+"""Persistence Port surface.
 
 Re-exports all Store / Port Protocols. Modules import from here (or the top-level
 ``usagi_agent.ports``) — never from concrete InMemory/SQLite implementations.

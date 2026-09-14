@@ -1,4 +1,4 @@
-"""ErasureControl state (design §24.5).
+"""ErasureControl state.
 
 Isomorphic to RunControlState but for the independent ErasureWorkflow: it does NOT reuse
 the cancelled Run's identity, checkpoint, lease or fencing token.

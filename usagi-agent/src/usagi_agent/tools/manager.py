@@ -1,4 +1,4 @@
-"""Service-lifetime tool ownership and execution (ToolRuntime v1, design §21.5).
+"""Service-lifetime tool ownership and execution (ToolRuntime v1, design ).
 
 ToolManager is the registry AND the v1 ToolRuntime implementation: one
 ``execute`` call runs the standardized pipeline
@@ -10,7 +10,7 @@ ToolManager is the registry AND the v1 ToolRuntime implementation: one
 Every failure becomes a structured observation with a safe reason so the
 model can see *why* a call failed and adapt on the next pass. Only write-class
 timeouts/crashes produce ``status="unknown"`` — those must never be assumed
-not-executed (§21.7).
+not-executed.
 """
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ class ToolManager:
 
     @staticmethod
     def _validate_spec(spec: ToolSpec) -> None:
-        """Bootstrap-time capability consistency (§21.3)."""
+        """Bootstrap-time capability consistency."""
         if spec.risk == "read":
             if spec.write_safety is not None:
                 raise ValueError(
@@ -441,7 +441,7 @@ class ToolManager:
             )
         except CASMismatch:
             # A reconciler or late settler moved the record first; first
-            # settlement stays immutable (§21.7) so we only drop this update.
+            # settlement stays immutable so we only drop this update.
             pass
 
     async def attach_observation(

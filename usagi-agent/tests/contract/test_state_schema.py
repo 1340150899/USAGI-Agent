@@ -1,4 +1,4 @@
-"""State schema contract tests (design §8.2, §31.1).
+"""State schema contract tests.
 
 The State schema must hold ONLY low-sensitivity routing fields and ArtifactRef (as opaque
 id strings). Raw chat, images, prompts, model responses, ContextPack, AgentAction, Tool

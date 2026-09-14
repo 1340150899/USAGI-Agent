@@ -1,8 +1,8 @@
-"""OpenTelemetry observability (design §25).
+"""OpenTelemetry observability.
 
 This module owns the *initialization* of tracing/metrics resources and exposes thin
 helpers for manual instrumentation. It must never record ``ArtifactRef``, checkpoint id,
-principal id or ``run_id`` in span attributes or metric attributes (§25.3/§25.4).
+principal id or ``run_id`` in span attributes or metric attributes.
 """
 
 from usagi_agent.observability.telemetry import (

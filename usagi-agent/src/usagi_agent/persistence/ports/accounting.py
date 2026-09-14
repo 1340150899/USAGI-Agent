@@ -1,4 +1,4 @@
-"""Accounting Ports: UsageLedger + AuditStore (design §10.7, §24.3).
+"""Accounting Ports: UsageLedger + AuditStore.
 
 Both split append-only non-sensitive Fact from crypto-erasable IdentityLink. Erasure
 deletes the link; the core fact is never modified or re-keyed.

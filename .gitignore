@@ -27,6 +27,9 @@ env/
 .vscode/
 .idea/
 
+# Local design and development documentation
+docs/
+
 # Local runtime files
 .usagi/
 usagi-agent/.usagi/

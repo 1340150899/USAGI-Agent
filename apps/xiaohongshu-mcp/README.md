@@ -4,6 +4,10 @@
 
 [English](./README_EN.md) · [Docker 指南](./docker/README.md) · [HTTP API](./docs/API.md) · [集成示例](./examples/README.md)
 
+## 项目来源
+
+本目录基于开源项目 [xpzouying/xiaohongshu-mcp](https://github.com/xpzouying/xiaohongshu-mcp) 修改，保留原项目的 MCP、浏览器自动化和 REST API 能力，并加入当前仓库需要的交互与发布改动。上游项目的许可和贡献记录以原仓库为准。
+
 ## 项目定位
 
 本项目把登录、内容发布、搜索和互动能力封装为 MCP 工具。客户端连接后，可以通过自然语言调用这些工具；服务端使用浏览器完成实际操作，而不是调用未公开的平台接口。
@@ -64,9 +68,7 @@
 ### 从源码运行
 
 ```bash
-git clone https://github.com/YuriGao/xiaohongshu-mcp.git
-cd xiaohongshu-mcp
-
+cd apps/xiaohongshu-mcp
 go build -o build/xiaohongshu-mcp .
 go build -o build/login ./cmd/login
 ```
@@ -260,7 +262,3 @@ go test -tags=integration ./xiaohongshu -run TestName -count=1
 ```
 
 贡献代码前请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)。
-
-## 项目来源
-
-本仓库基于 [xpzouying/xiaohongshu-mcp](https://github.com/xpzouying/xiaohongshu-mcp) 持续维护，并增加真人化浏览器交互与发布流程改进。

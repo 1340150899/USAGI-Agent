@@ -1,4 +1,4 @@
-"""Memory Port (design §22.8)."""
+"""Memory Port."""
 from __future__ import annotations
 
 from typing import Literal, Protocol, runtime_checkable

@@ -1,4 +1,4 @@
-"""Tool selection (design §21.4 seam).
+"""Tool selection.
 
 V1 behavior is the agent allowlist verbatim. Future implementations
 (semantic recall, token-budget pruning, ToolDiscovery) replace this class

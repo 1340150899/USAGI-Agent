@@ -1,4 +1,4 @@
-"""InMemory UsageLedger + AuditStore (§10.7, §24.3)."""
+"""InMemory UsageLedger + AuditStore."""
 from __future__ import annotations
 
 import asyncio

@@ -10,7 +10,7 @@ class ToolInitializer:
     def init(persistence, *, specs=None) -> ToolManager:
         """Build the ToolManager with builtin tools and the execution store.
 
-        Spec consistency (risk vs write_safety, §21.3) is enforced by
+        Spec consistency (risk vs write_safety, ) is enforced by
         ``ToolManager.register`` at construction time, so a bad declaration
         fails bootstrap rather than a run.
         """

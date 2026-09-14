@@ -1,4 +1,4 @@
-"""Model request/response contract (design §18)."""
+"""Model request/response contract."""
 from __future__ import annotations
 
 from decimal import Decimal

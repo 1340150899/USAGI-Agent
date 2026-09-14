@@ -1,4 +1,4 @@
-"""SQLite RunControlStore (design §10.6).
+"""SQLite RunControlStore.
 
 Shares the same DB as :class:`SqliteFencedCheckpointer` so the gate verification the
 checkpointer performs reads authoritative rows written here. Ordinary ``version`` CAS is

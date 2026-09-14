@@ -1,4 +1,4 @@
-"""AgentAction + PassResult + ToolObservation (design §19.3, §20.3, §21.6).
+"""AgentAction + PassResult + ToolObservation.
 
 ResultProcess interprets the raw model response and forms AgentActions. Framework
 ResultProcess rules govern executable actions; End only routes the resulting pass.
@@ -83,7 +83,7 @@ class ToolObservation(BaseModel):
 
 
 class PassResult(BaseModel):
-    """EndRule's per-pass disposition; itself persisted as an Artifact (§20.3)."""
+    """EndRule's per-pass disposition; itself persisted as an Artifact."""
 
     disposition: Literal["next_pass", "run_completed", "run_failed"]
     final_output_ref: FinalOutputRef | None = None

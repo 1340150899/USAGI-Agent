@@ -1,8 +1,7 @@
-"""InMemory dev implementations of all Store Ports (design §24.1, M0A spike).
+"""InMemory dev implementations of all Store Ports.
 
 Single-process, volatile. Correctness of CAS / lease / idempotency semantics is
-preserved so the same Runtime API contract holds; durability is NOT promised here
-(§30.1: InMemory checkpoint carries no recovery promise). SQLite backends add durability.
+preserved so the same Runtime API contract holds; durability is NOT promised here. SQLite backends add durability.
 """
 from usagi_agent.persistence.inmemory.run_lifecycle import (
     InMemoryExecutionContextStore,

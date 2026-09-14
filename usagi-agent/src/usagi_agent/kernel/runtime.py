@@ -1,4 +1,4 @@
-"""Kernel Runtime — execution root (design §10.4, §10.5, §10.6).
+"""Kernel Runtime — execution root.
 
 This module is *execution only*. Construction of its dependencies happens in
 :mod:`usagi_agent.kernel.initializer` (init). The Runtime:
@@ -10,7 +10,7 @@ This module is *execution only*. Construction of its dependencies happens in
 * projects RunControlState -> RunOutcome, never exposing tokens via GET.
 
 Fencing / lease / budget CAS all go through the injected Stores; the Runtime holds no
-mutable run state itself (§3.4: Agent/stateless, State externalized).
+mutable run state itself.
 """
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ from usagi_agent.sessions.types import SessionMessage
 
 _LEASE_TTL_SECONDS = 60
 log = logging.getLogger(__name__)
-_DEV_HMAC_KEY = b"usagi-dev-fingerprint-key"  # TODO(§24.5): tenant-scoped HMAC key service
+_DEV_HMAC_KEY = b"usagi-dev-fingerprint-key"  # TODO: tenant-scoped HMAC key service
 
 
 def _now() -> datetime:
@@ -109,7 +109,7 @@ def _client_fingerprint(
 
 
 class LeaseManager:
-    """Lease acquire/renew/release on the independent ``lease_version`` axis (§10.6)."""
+    """Lease acquire/renew/release on the independent ``lease_version`` axis."""
 
     def __init__(self, ports: InfrastructurePorts) -> None:
         self._ports = ports
@@ -142,7 +142,7 @@ class LeaseManager:
 
 
 class RunControlManager:
-    """Status CAS transitions on the ordinary ``version`` axis (§10.5, §10.6)."""
+    """Status CAS transitions on the ordinary ``version`` axis."""
 
     def __init__(self, ports: InfrastructurePorts) -> None:
         self._ports = ports
@@ -232,7 +232,7 @@ class _KernelRuntime:
         self._rcm = RunControlManager(self._ports)
         self._components = runtime.kernel_components
 
-    # --- public lifecycle API (§10.5) ---
+    # --- public lifecycle API ---
 
     async def create_session(self, request: RunStartRequest, *, auth=None) -> SessionMessage:
         auth_context = self._resolve_auth(auth)
@@ -452,7 +452,7 @@ class _KernelRuntime:
         namespace = f"{self._tenant}:{auth_context.principal.principal_opaque_id}"
         client_fp = _client_fingerprint(self._tenant, namespace, session_id, request)
 
-        # Dedup BEFORE resolving the Bundle (§10.5): same key + same fingerprint -> replay.
+        # Dedup BEFORE resolving the Bundle: same key + same fingerprint -> replay.
         existing = await self._ports.run_start_request_store.get_by_key(
             self._tenant, namespace, request.request_idempotency_key
         )
@@ -474,7 +474,7 @@ class _KernelRuntime:
         # fields never leak into the next user turn.
         thread_id = run_id
 
-        # Persist input as a quarantined Artifact (§10.5).
+        # Persist input as a quarantined Artifact.
         # Persist the complete request as one opaque ingress payload. Kernel does
         # not inspect or split business fields and content parts; PreRecall owns
         # that normalization.
@@ -616,7 +616,7 @@ class _KernelRuntime:
     async def _keep_lease_alive(
         self, run_id: str, owner: str, fencing_token: int
     ) -> None:
-        """Renew the run lease while the graph executes (§10.6).
+        """Renew the run lease while the graph executes.
 
         Long model calls can exceed one lease TTL between checkpoint writes;
         without renewal the fenced checkpointer rejects the next write. The
@@ -810,7 +810,7 @@ class _KernelRuntime:
                 )],
             )
         if status == "resume_accepted":
-            # Projected as Resuming (§10.5).
+            # Projected as Resuming.
             return Running(run_id=run_id, started_at=_now(), scenario_key="")  # simplified
         if status == "cancel_requested":
             from usagi_agent.types.run import Cancelling

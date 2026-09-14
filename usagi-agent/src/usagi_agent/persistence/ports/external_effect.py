@@ -1,4 +1,4 @@
-"""External-effect settlement Ports (design §10.8).
+"""External-effect settlement Ports.
 
 Concise contract surface; the full settlement state machines (effect/resource aggregate,
 scope links, case links, finality, conflicts) live in the tools/erasure modules. The Port

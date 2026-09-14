@@ -1,4 +1,4 @@
-"""Transactional outbox + event bus Ports (design §24.2).
+"""Transactional outbox + event bus Ports.
 
 Business commits and event publishing stay consistent via the outbox. Payload may only be
 a low-sensitivity envelope or ArtifactRef — never raw chat / tool params / route

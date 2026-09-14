@@ -1,4 +1,4 @@
-"""Run-lifecycle records + Store Ports (design §10.5, §10.6).
+"""Run-lifecycle records + Store Ports.
 
 These records are the authoritative runtime truth (RunControlState, ResumeAttempt,
 InterruptCredential) and the immutable execution context. They are shared across the
@@ -30,7 +30,7 @@ class RunStartRequestRecord(BaseModel):
 
 
 class ExecutionContextSnapshot(BaseModel):
-    """Immutable execution safety context, created with the Run (§10.6)."""
+    """Immutable execution safety context, created with the Run."""
 
     run_id: str
     thread_id: str
@@ -48,7 +48,7 @@ class ExecutionContextSnapshot(BaseModel):
 
 class RunControlState(BaseModel):
     """The single mutable runtime-control truth; budget/status via `version`,
-    lease via separate `lease_version` (§10.6)."""
+    lease via separate `lease_version`."""
 
     run_id: str
     tenant_id: str
@@ -147,7 +147,7 @@ class RunControlStore(Protocol):
         lease_expires_at: datetime | None,
         fencing_token: int,
     ) -> RunControlState:
-        """CAS on independent `lease_version` for acquire/renew/release (§10.6)."""
+        """CAS on independent `lease_version` for acquire/renew/release."""
         ...
 
 

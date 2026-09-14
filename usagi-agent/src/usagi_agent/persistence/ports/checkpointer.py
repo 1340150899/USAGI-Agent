@@ -1,4 +1,4 @@
-"""Checkpointer Port (design §10.6).
+"""Checkpointer Port.
 
 ``FencedCheckpointer`` is a *custom* LangGraph ``BaseCheckpointSaver`` implementation,
 not a decorator that wraps a standard saver. Concrete impls (InMemory / SQLite) live in
@@ -22,7 +22,7 @@ __all__ = ["BaseCheckpointSaver", "AuthorizedCheckpointAdmin"]
 
 @runtime_checkable
 class AuthorizedCheckpointAdmin(Protocol):
-    """Business-facing thread deletion (§10.6). ``run_id``/tenant come from binding."""
+    """Business-facing thread deletion. ``run_id``/tenant come from binding."""
 
     supports_authorized_delete: Literal[True]
 

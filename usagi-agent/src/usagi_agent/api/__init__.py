@@ -1,4 +1,4 @@
-"""Stable public API surface (design §5.1 dependency direction).
+"""Stable public API surface.
 
 Application code imports from ``usagi_agent.api`` (or the top-level ``usagi_agent``).
 Internal modules are not part of the stable API. This package only re-exports symbols

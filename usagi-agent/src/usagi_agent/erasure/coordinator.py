@@ -1,10 +1,10 @@
-"""ErasureCoordinator (design §24.5).
+"""ErasureCoordinator.
 
 Executes the fixed erasure flow for a subject/conversation scope. v1 implements the core
 dev path (tombstone -> traverse Lineage -> delete artifacts/thread -> key destruction ->
 receipt) over the InMemory stores; the full per-Store deletion matrix, tenant acceptance
-lock, independent ErasureWorkflow LangGraph and backup deletion-ledger replay are marked
-TODO(§24.5) and are exercised structurally, not fully, in the first version.
+lock, independent ErasureWorkflow LangGraph and backup deletion-ledger replay are not yet
+fully implemented; the first version exercises only their structural contracts.
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ class ErasureCoordinator:
     async def request_erasure(
         self, scope_ref: str, request_idempotency_key: str,
     ) -> ErasureControlState:
-        """Accept an erasure request: create case + commit tombstone (§24.5)."""
+        """Accept an erasure request: create case + commit tombstone."""
         case_id = f"erase_{uuid.uuid4().hex}"
         state = ErasureControlState(
             erasure_case_id=case_id, tenant_id=self._tenant, target_scope_ref=scope_ref,
@@ -65,7 +65,7 @@ class ErasureCoordinator:
                     operation_id=f"erase:{state.erasure_case_id}:{ref}",
                 )
             except Exception:
-                pass  # TODO(§24.5): per-Store matrix verification, not silent swallow in prod.
+                pass  # TODO: per-Store matrix verification, not silent swallow in prod.
         # 3. delete the checkpoint thread (if the checkpointer supports authorized admin)
         checkpointer: object = self._ports.checkpointer
         admin = (
@@ -90,7 +90,7 @@ class ErasureCoordinator:
         receipt = ErasureReceipt(
             erasure_case_id=state.erasure_case_id, completed_at=_now(),
             scope_deleted=[scope], threads_deleted=[scope] if admin is not None else [],
-            keys_destroyed=[],  # TODO(§24.5): KeyDestructionStore for scope/derivation DEKs
+            keys_destroyed=[],  # TODO: KeyDestructionStore for scope/derivation DEKs
         )
         done = state.model_copy(update={
             "status": "completed", "receipt_ref": state.erasure_case_id,

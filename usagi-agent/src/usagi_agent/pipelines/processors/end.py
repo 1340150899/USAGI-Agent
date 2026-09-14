@@ -1,4 +1,4 @@
-"""End stage: route the finished pass (design §20).
+"""End stage: route the finished pass.
 
 Pure disposition router. Action execution already happened in the
 ResultProcess stage; this stage consumes the formed action_type plus any

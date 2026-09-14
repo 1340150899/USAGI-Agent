@@ -1,4 +1,4 @@
-"""Memory + Vector store Ports (design §22)."""
+"""Memory + Vector store Ports."""
 from __future__ import annotations
 
 from datetime import datetime

@@ -1,4 +1,4 @@
-"""InMemory run-lifecycle stores with correct CAS / lease semantics (§10.5, §10.6)."""
+"""InMemory run-lifecycle stores with correct CAS / lease semantics."""
 from __future__ import annotations
 
 import asyncio

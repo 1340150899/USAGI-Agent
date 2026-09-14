@@ -1,4 +1,4 @@
-"""Settlement / external-effect shared contract (design §10.8, §21.3).
+"""Settlement / external-effect shared contract.
 
 Referenced by kernel, tools and erasure; defined centrally so modules stay decoupled.
 These are pure data — no execution logic lives here.
@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from usagi_agent.types.refs import AdapterRef, SchemaRef, SecretRef
 
-# --- Write safety / execution status enums (§21.3, §10.8) ---
+# --- Write safety / execution status enums ---
 
 WriteSafetyMode = Literal[
     "external_idempotency",
@@ -44,7 +44,7 @@ class ExternalDeleteCapabilityRef(BaseModel):
 
 
 class ExternalEffectPolicy(BaseModel):
-    """Immutable policy attached to a creates_external_resource Tool (§21.3)."""
+    """Immutable policy attached to a creates_external_resource Tool."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -62,7 +62,7 @@ class ExternalEffectPolicy(BaseModel):
 
 
 class ExternalInvocationState(BaseModel):
-    """Two orthogonal state axes for model/tool invocations (§10.8)."""
+    """Two orthogonal state axes for model/tool invocations."""
 
     execution_status: ExecutionStatus
     adoption_status: AdoptionStatus
@@ -93,7 +93,7 @@ class SettlementPermit(BaseModel):
 
 
 class DurableInvokeStartMarker(BaseModel):
-    """Durable marker proving a real external call started (§10.8).
+    """Durable marker proving a real external call started.
 
     Its existence is the sole discriminator between ``cancelled_before_invoke`` and
     ``delivery_unknown``.
@@ -110,7 +110,7 @@ class DurableInvokeStartMarker(BaseModel):
 
 
 class FencingGate(BaseModel):
-    """Live fencing gate passed into graph config (§10.6). Not authoritative by itself."""
+    """Live fencing gate passed into graph config. Not authoritative by itself."""
 
     tenant_id: str
     control_kind: ControlKind
@@ -120,7 +120,7 @@ class FencingGate(BaseModel):
 
 
 class DestructivePermit(BaseModel):
-    """Permit required to destroy a thread/scope (§10.6)."""
+    """Permit required to destroy a thread/scope."""
 
     tenant_id: str
     thread_id: str
@@ -132,7 +132,7 @@ class DestructivePermit(BaseModel):
 
 
 class UsageFact(BaseModel):
-    """Append-only non-sensitive usage fact (§10.7). No tenant/run/source identity."""
+    """Append-only non-sensitive usage fact. No tenant/run/source identity."""
 
     usage_event_id: str
     kind: Literal["model", "tool", "pass", "tool_call", "token", "cost"]
@@ -143,7 +143,7 @@ class UsageFact(BaseModel):
 
 
 class UsageIdentityLink(BaseModel):
-    """Encrypted, crypto-erasable identity mapping for a UsageFact (§10.7)."""
+    """Encrypted, crypto-erasable identity mapping for a UsageFact."""
 
     usage_event_id: str
     tenant_id: str

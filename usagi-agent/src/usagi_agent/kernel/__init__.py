@@ -1,4 +1,4 @@
-"""Kernel: Runtime, lifecycle, budget, fencing, settlement (design §10).
+"""Kernel: Runtime, lifecycle, budget, fencing, settlement.
 
 The public execution API lives on :class:`usagi_agent.server.Server`; this package
 contains only the internal run-control and lease components.

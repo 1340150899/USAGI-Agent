@@ -1,4 +1,4 @@
-"""Policy / Guardrail / Memory-candidate contract types (design §22, §23)."""
+"""Policy / Guardrail / Memory-candidate contract types."""
 from __future__ import annotations
 
 from typing import Literal
@@ -14,7 +14,7 @@ class PolicyObligation(BaseModel):
 
 
 class PolicyDecision(BaseModel):
-    """Deterministic, versioned; LLM cannot override (§23.2)."""
+    """Deterministic, versioned; LLM cannot override."""
 
     effect: Literal["allow", "deny", "require_approval"]
     reason_codes: list[str] = Field(default_factory=list)

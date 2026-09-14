@@ -1,4 +1,4 @@
-"""FencedCheckpointer + ThreadControlBinding contract tests (design §10.6, §31.1)."""
+"""FencedCheckpointer + ThreadControlBinding contract tests."""
 from __future__ import annotations
 
 import asyncio
@@ -110,7 +110,7 @@ async def test_sqlite_durable_round_trip_and_bad_gate():
 
 
 def test_thread_control_binding_global_unique():
-    """Two tenants inserting the same thread_id must fail the second (§10.6)."""
+    """Two tenants inserting the same thread_id must fail the second."""
     db = os.path.join(tempfile.gettempdir(), "usagi_binding.sqlite")
     if os.path.exists(db):
         os.remove(db)

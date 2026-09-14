@@ -1,8 +1,8 @@
-"""Run lifecycle public types (design §10.5, §23.4).
+"""Run lifecycle public types.
 
 These are the stable ``RunOutcome`` projection and resume envelope contract. ``RunOptions``
 is ``extra="forbid"``: clients cannot self-report identity or override Model/Tool/Memory/
-Rule/Prompt/Pipeline configuration (§10.5).
+Rule/Prompt/Pipeline configuration.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ class CancellationReasonCode(str, Enum):
     POLICY_REVOKED = "policy_revoked"
 
 
-# Internal RunControl status (§10.6); the public RunOutcome below is its projection.
+# Internal RunControl status; the public RunOutcome below is its projection.
 RunStatus = Literal[
     "running",
     "suspended",
@@ -37,7 +37,7 @@ RunStatus = Literal[
 
 
 class RunOptions(BaseModel):
-    """Run control only; no self-reported identity, no config override (§10.5)."""
+    """Run control only; no self-reported identity, no config override."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -51,7 +51,7 @@ class RunOptions(BaseModel):
     )
 
 
-# --- RunOutcome variants (§10.5) ---
+# --- RunOutcome variants ---
 
 class Running(BaseModel):
     kind: Literal["running"] = "running"
@@ -165,7 +165,7 @@ class ResumeTokenEnvelope(BaseModel):
     resume_token: SecretStr
 
 
-# --- ResumeEnvelope (§23.4): discriminated union, never self-reported actor ---
+# --- ResumeEnvelope: discriminated union, never self-reported actor ---
 
 class ResumeBase(BaseModel):
     interrupt_id: str

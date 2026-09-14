@@ -1,6 +1,10 @@
 # USAGI HTTP Server
 
-应用组合入口：注册 Agent 与小红书 MCP，接收两端微信输入，执行持久化任务并投递结果。完整架构见 [接入说明](../../docs/application-integration.md)。
+应用组合入口：注册 Agent 与小红书 MCP，接收两端微信输入，执行持久化任务并投递结果。
+
+## 项目来源
+
+该服务是 USAGI-Agent 自有代码，不是第三方项目的分支。它通过 MCP 连接仓库内基于 [xpzouying/xiaohongshu-mcp](https://github.com/xpzouying/xiaohongshu-mcp) 修改的小红书服务，并可连接基于 [Tencent/openclaw-weixin](https://github.com/Tencent/openclaw-weixin) 部分源码实现的微信 Adapter。
 
 ## 安装与启动
 
@@ -33,9 +37,31 @@ MCP 在单独终端/服务运行；随后在仓库根目录启动：
 python -m usagi_httpserver --config apps/httpserver/config.json
 ```
 
+## 服务配置
+
+配置文件由 `config.example.json` 复制得到，私有的 `config.json` 已被 Git 忽略。主要字段如下：
+
+| 字段 | 作用 | 示例/默认值 |
+|---|---|---|
+| `host` / `port` | HTTP 监听地址 | `127.0.0.1:8080` |
+| `data_dir` | Runtime、任务和锁文件目录 | `.usagi/http` |
+| `log_dir` | 分级日志根目录 | `log` |
+| `model_profile` | `chat` 使用 DeepSeek；`coding_plan` 使用 GLM Coding Plan | `chat` |
+| `model_execution_mode` | `live` 调用真实模型；`scripted` 用于本地测试 | `live` |
+| `database_environment` | 选择 `application-*` 和 `runtime-*` 数据库 | `debug` |
+| `xhs_url` | 小红书 Streamable HTTP MCP 地址；`null` 表示不注册 | `http://127.0.0.1:18060/mcp` |
+| `weixin_adapter` | Adapter 地址、token 环境变量及可选超时 | 本机 `8090` |
+| `bindings` | token 环境变量到 principal/source/account 的认证绑定 | 必填 |
+| `reply_routes` | principal 的默认微信回复路由 | 按扫码结果填写 |
+| `resume_key_env` | 恢复签名密钥所在环境变量 | `USAGI_RESUME_KEY` |
+| `silence_seconds` | 素材窗口静默时间 | `10` |
+| `otel_*` | OpenTelemetry 导出器、端点、采样率和指标周期 | 见示例配置 |
+
+`chat` 读取 `DEEPSEEK_API_KEY`，`coding_plan` 读取 `GLM_API_KEY`。`bindings` 中每个 `token_env` 和 `weixin_adapter.token_env` 指向的环境变量都必须存在；不同用途不要复用 token。`USAGI_RESUME_KEY` 至少 32 字符并应在重启后保持不变。
+
 ### 本地查看 OpenTelemetry
 
-示例配置默认使用 `otel_exporter: "console"`，不需要安装 Collector 或 Grafana。Trace 在对应操作完成后直接输出到启动终端，Metric 按 `otel_metric_export_interval_millis` 周期输出。需要关闭时将 `otel_exporter` 改为 `"none"`；改为 `"otlp"` 并配置 `otel_endpoint` 则可发送到外部 Collector。详细字段和指标清单见 [OpenTelemetry 监控](../../docs/open-telemetry.md)。
+示例配置默认使用 `otel_exporter: "console"`，不需要安装 Collector 或 Grafana。Trace 在对应操作完成后直接输出到启动终端，Metric 按 `otel_metric_export_interval_millis` 周期输出。需要关闭时将 `otel_exporter` 改为 `"none"`；改为 `"otlp"` 并配置 `otel_endpoint` 则可发送到外部 Collector。
 
 仅测试聊天可将 `xhs_url` 设为 `null`。HTTP 默认本机 8080，Node 默认 8090，MCP 默认 18060。Windows 跨机器访问使用 TLS 反向代理或受信任隧道；Node 和 MCP 保持内网。MCP 与 HTTP 必须共享 media 绝对路径和读取权限；容器部署时挂载同一目录。浏览器登录需部署账号实际完成，且内置 MCP 禁止无头模式。
 

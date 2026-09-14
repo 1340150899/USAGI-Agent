@@ -1,4 +1,4 @@
-"""Kernel cross-cutting managers (design §10.3, §10.7, §10.8).
+"""Kernel cross-cutting managers.
 
 These are *execution* helpers (constructed at Bootstrap, methods run at Run time). They are
 deliberately thin: the heavy state-machine work lives in the Stores; the managers compose
@@ -15,7 +15,7 @@ from usagi_agent.types.settlement import FencingGate
 
 
 class BudgetManager:
-    """Checks hard ceilings against the UsageLedger projection (§10.7)."""
+    """Checks hard ceilings against the UsageLedger projection."""
 
     def __init__(self, ports: InfrastructurePorts) -> None:
         self._ports = ports
@@ -65,7 +65,7 @@ class CancellationManager:
 
 
 class MiddlewareChain:
-    """Ordered pre-node checks: cancel -> deadline -> budget -> fencing (§10.8)."""
+    """Ordered pre-node checks: cancel -> deadline -> budget -> fencing."""
 
     def __init__(self, budget: BudgetManager, cancellation: CancellationManager) -> None:
         self._budget = budget
@@ -79,7 +79,7 @@ class MiddlewareChain:
 
 
 class ErrorMapper:
-    """Maps internal errors to structured SafeError / reason codes (§19.3)."""
+    """Maps internal errors to structured SafeError / reason codes."""
 
     @staticmethod
     def to_reason(exc: Exception) -> list[str]:
@@ -91,7 +91,7 @@ class ErrorMapper:
 
 
 class EventPublisher:
-    """Publishes lifecycle events via the outbox (transactional, §24.2)."""
+    """Publishes lifecycle events via the outbox (transactional, )."""
 
     def __init__(self, ports: InfrastructurePorts) -> None:
         self._ports = ports

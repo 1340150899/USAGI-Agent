@@ -1,4 +1,4 @@
-"""Framework error hierarchy (design §19.3, §21.6).
+"""Framework error hierarchy.
 
 Structured, low-sensitivity errors (no raw exceptions / secrets / unbounded output).
 Reason codes come from a closed Registry — never free text that could embed identities.
@@ -72,7 +72,7 @@ class CASMismatch(UsagiError):
 
 
 class LeaseLost(UsagiError):
-    """Lease renewal failed — another owner holds the lease (§10.6)."""
+    """Lease renewal failed — another owner holds the lease."""
 
     reason_code = "lease.lost"
 

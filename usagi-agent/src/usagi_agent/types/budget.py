@@ -1,7 +1,7 @@
-"""Budget types (design §4.1).
+"""Budget types.
 
-Note (§4.1): pass/tool-call/delegation count limits are NOT declared here — they are
-required direct fields on ``AgentLoopSpec`` (§9.3) to avoid a second source of truth.
+Note: pass/tool-call/delegation count limits are NOT declared here — they are
+required direct fields on ``AgentLoopSpec`` to avoid a second source of truth.
 """
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ class RecallBudget(BaseModel):
 
 
 class ContextBudget(BaseModel):
-    """Token budget computed and consumed by ContextBuildRule (§17.3)."""
+    """Token budget computed and consumed by ContextBuildRule."""
 
     total_tokens: int
     system_prompt_tokens: int
@@ -77,7 +77,7 @@ class ContextBudgetUsage(BaseModel):
 
 
 class PromptBudgetProfile(BaseModel):
-    """Prompt budget attributes (§18.4) used to compute ContextBudget reservations."""
+    """Prompt budget attributes used to compute ContextBudget reservations."""
 
     system_prompt_tokens: int
     reserved_output_tokens: int

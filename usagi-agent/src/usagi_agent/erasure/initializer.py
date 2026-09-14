@@ -1,7 +1,7 @@
-"""Erasure initializer (design §24.5, init-tree node).
+"""Erasure initializer.
 
 Constructs the ErasureCoordinator from the injected Ports. Init only; the coordinator's
-``request_erasure`` runs later. The independent ErasureWorkflow LangGraph is a TODO(§24.5).
+``request_erasure`` runs later. The independent ErasureWorkflow LangGraph is a TODO.
 """
 from __future__ import annotations
 

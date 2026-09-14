@@ -1,4 +1,4 @@
-"""Erasure / Lineage Port surface (design §24.5).
+"""Erasure / Lineage Port surface.
 
 Concise Protocols; concrete record types and state machines live in the
 ``usagi_agent.erasure`` module (Layer 8). These Ports keep Erasure decoupled from the

@@ -1,90 +1,59 @@
 # USAGI-Agent
 
-[OpenTelemetry 监控与 OTLP Collector 配置](docs/open-telemetry.md)
+USAGI-Agent 是一个基于 LangGraph 的通用 Agent 框架。项目的应用层实现了：采集微信聊天内容，让 Agent 自动整理图片和文字、生成适合分享日常的小红书内容，并通过小红书 MCP 完成发布。
 
-一个基于 LangGraph 工作流引擎的标准、通用、可扩展 Agent Framework；小红书自动发帖是基于该框架实现的首个业务应用。
+## 项目结构
 
-## 文档
-
-- [应用接入实施记录](docs/application-integration.md) — HTTP Server 与通用工具审批进度
-- [HTTP Server](apps/httpserver/README.md) — 本地运行和审批 API
-
-- [通用 Agent Framework 架构](docs/generic-agent-framework.md) — 框架权威设计（§29 工程结构、§7.1 bootstrap 序列等）
-- [Agent 技术架构方案](docs/agent-architecture.md) — 小红书业务应用架构
-- [原始需求流程图](requirements-flow.jpg)
-- [原始 Agent 架构草图](agent-architecture-flow.jpg)
-
-## 工程结构（对应设计 §29）
-
-```
+```text
 USAGI-Agent/
-├─ usagi-agent/                 # 业务无关通用框架（Kernel + Capabilities + Ports）
-│  ├─ src/usagi_agent/
-│  │  ├─ types/                 # §4.1/§8.1 共享类型（跨模块唯一允许的类型共享面）
-│  │  ├─ ports/                 # 稳定 Port 表面（基础设施 + 能力 Protocol）
-│  │  ├─ persistence/           # §24 Port 接口 + inmemory/sqlite 实现
-│  │  ├─ kernel/                # §10 Runtime/生命周期/预算/取消/fencing（执行根 + initializer）
-│  │  ├─ registry/              # §11 静态 RuntimeBundleCatalog + BootstrapSettings + 校验
-│  │  ├─ adapters/              # §11.6 AdapterContainer (DI)
-│  │  ├─ pipelines/             # §9 Spec + Compiler + AgentLoop + 六 Rule
-│  │  ├─ tools/ memory/ rag/ prompts/ policies/   # §21-23 能力
-│  │  ├─ erasure/               # §24.5 Erasure/Lineage
-│  │  ├─ observability/         # §25 OpenTelemetry
-│  │  └─ server/               # 组合根：application_container(init 树根) + bootstrap + server(执行)
-│  └─ tests/                    # contract + pipeline 测试
-├─ plugins/                     # 可替换插件（§26，首版不实现 manifest 加载）
-├─ apps/httpserver/             # 应用组合入口、持久化队列、审批和通知
-├─ apps/weixin-adapter/         # 独立 Node 微信通信进程，无 OpenClaw 宿主
-├─ apps/wechat-edge/            # Windows wxauto 素材采集进程
-├─ apps/xiaohongshu-mcp/        # Go 小红书 MCP 服务（Streamable HTTP）
-└─ examples/structured_agent/   # 业务无关端到端示例：research_writer
+├── usagi-agent/                 # 通用 Agent 框架及测试
+│   └── src/usagi_agent/
+│       ├── agents/              # Agent 与模型配置
+│       ├── kernel/              # Run 生命周期、预算、取消与执行控制
+│       ├── pipelines/           # 场景流水线、阶段处理器与规则
+│       ├── tools/               # 本地工具、MCP 工具和审批
+│       ├── memory/              # 会话记忆与长期记忆
+│       ├── persistence/         # 内存与 SQLite 持久化
+│       ├── observability/       # 日志、Trace 与 Metric
+│       └── server/              # Runtime 初始化与服务接口
+├── examples/structured_agent/   # 通用框架示例
+├── apps/httpserver/             # Agent HTTP 服务和业务编排
+├── apps/weixin-adapter/         # 微信 iLink 消息适配服务
+├── apps/wechat-edge/            # Windows 微信素材采集服务
+├── apps/xiaohongshu-mcp/        # 小红书 MCP/REST 服务
+├── deploy/                      # systemd 与 Windows 启动模板
+└── plugins/                     # 可扩展组件预留目录
 ```
 
-## 架构硬约束（贯穿全库）
+## Agent 框架简介
 
-1. **初始化就是初始化**：每个模块 `initializer.py` 只在 Bootstrap 期构造/校验，绝不执行业务；执行件
-   （`runtime.py`/`nodes.py`）只在 Run 期被调用。两者不互相 import 执行逻辑。
-2. **模块解耦**：模块只允许 import 三类稳定表面 `types.*` / `ports.*` / `api.*`；跨模块连线由
-   `server/application_container.py`（组合根）显式注入。
-3. **静态 Catalog**：Spec/Adapter/Graph 在 Bootstrap 期构造、校验、编译并装入只读
-   `RuntimeBundleCatalog`；Run 期只按 `scenario_key` 取 Bundle，不重新解析 Spec/建 Adapter/编译图（§2.3）。
-4. **LangGraph 是唯一执行引擎**（§3.1）：`PipelineCompiler` 把 Spec 编译成 LangGraph StateGraph/subgraph。
-5. **State 只存低敏路由字段 + ArtifactRef**（§8.2）：checkpoint 不内嵌领域 payload，由 contract test 强制。
+框架以场景配置组织 Agent 工作流。启动时注册模型、工具和场景并编译 LangGraph；运行时由 Pipeline 依次完成上下文构建、模型调用、工具执行、结果处理和会话持久化。工具支持白名单、参数校验、人工审批和 MCP 接入，运行数据可保存到 SQLite，并提供 OpenTelemetry 可观测能力。
 
-## 初始化树（§7.1）
+`usagi-agent` 不包含微信或小红书等业务概念，具体渠道和业务编排放在 `apps/` 中。
 
-`server/application_container.py::ApplicationContainer.init` 按依赖顺序调用各模块 Initializer，
-**只构造/校验/编译，不含 Run 期执行**：
+## 启动方式
 
-```
-ApplicationContainer.init(settings, scenarios)
- ├─ ObservabilityInitializer.init        → OTel Provider              # §25
- ├─ PersistenceInitializer.init          → InfrastructurePorts (全部 Store)  # §24
- ├─ CapabilityInitializer.init           → AgentManager 内置 live/scripted 模型执行、Memory/Tool/Policy  # §11.5
- ├─ KernelInitializer.init               → Budget/Cancellation/Middleware 执行件壳  # §10
- ├─ CatalogBuilder.build                 → 每 scenario: 六 Rule 装配 + LangGraph 编译 → RuntimeBundle  # §7.1
- ├─ health_check                         → 任一必需 Bundle 不全 → 启动失败  # §7.1 step8
- ├─ ErasureInitializer.init              → ErasureCoordinator        # §24.5
- └─ _KernelRuntime(catalog, ports, ...)  # 私有执行引擎
-Server(runtime, ...)                     # 唯一公开的会话执行接口
-```
+以下命令在 Linux 环境执行，要求 Python 3.11+。运行最小示例：
 
-## 安装与运行
-
-```bash
-pip install -e usagi-agent
-# 端到端示例（SQLite 后端，两轮：Tool → next_pass → Final → run_completed）
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e './usagi-agent[dev]'
 python -m examples.structured_agent.run
-# 测试（State 契约 / Bundle 校验 / FencedCheckpointer gate / ThreadControlBinding 唯一 / 六 Rule 流程 / 幂等）
-pytest usagi-agent/tests
 ```
 
-## 范围说明（v1）
+运行框架测试：
 
-- **完整实现（可运行、有 dev 实现）**：类型/Spec/Port、SQLite 持久化、FencedCheckpointer
-  （含 fencing gate）、Kernel Runtime 启动/取消/查询、PipelineCompiler+不变量、六 Rule+AgentLoop、
-  ToolRuntime、MemoryManager、Policy/Guardrail、ArtifactManager、UsageLedger/AuditStore、OTel、
-  research_writer 端到端示例与核心 contract test。
-- **数据模型+状态机+关键流实现，最深边缘流以 `# TODO(§X)` 标注**：完整 resume/token 签发链路、
-  Erasure 完整闭环、ExternalEffect finality/correlation tombstone、AgentTeam Router/Supervisor/Debate、
-  Plugin manifest 加载。这些保留接口与状态机骨架，不破坏 init/execute 分离与模块解耦。
+```sh
+. .venv/bin/activate
+python -m pytest usagi-agent/tests
+```
+
+启动完整应用时，按需依次启动以下服务：
+
+1. [小红书 MCP](apps/xiaohongshu-mcp/README.md)：浏览器登录、内容发布和查询服务。
+2. [USAGI HTTP Server](apps/httpserver/README.md)：Agent Runtime、HTTP API 和任务处理。
+3. [微信 iLink Adapter](apps/weixin-adapter/README.md)：扫码登录后收发微信消息。
+4. [Windows 微信素材采集](apps/wechat-edge/README.md)：与已登录的 Windows 微信客户端搭配使用，采集客户端收到的文字和图片消息；该服务单独使用 PowerShell 启动。
+
+各服务的依赖安装、启动命令和配置字段以对应目录的 README 与 `config.example.json` 为准。

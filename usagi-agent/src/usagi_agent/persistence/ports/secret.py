@@ -1,4 +1,4 @@
-"""SecretStore Port (design §4.1, §11.6).
+"""SecretStore Port.
 
 Secrets are resolved only at the execution boundary and never enter Prompt, State,
 Artifact, logs or telemetry.

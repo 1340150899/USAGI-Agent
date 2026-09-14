@@ -1,9 +1,9 @@
-"""SQLite FencedCheckpointer (design §10.6).
+"""SQLite FencedCheckpointer.
 
 A custom ``BaseCheckpointSaver`` backed by SQLite. ``aput``/``aput_writes`` atomically
 verify the fencing gate (tenant/run/fencing_token/lease_owner/DB-clock expiry/status)
 inside the *same* transaction that writes the checkpoint — satisfying the single-DB
-transaction boundary (§2.3) and the §10.6 contract. ``thread_id == run_id`` (§12.5).
+transaction boundary and the  contract. ``thread_id == run_id``.
 """
 from __future__ import annotations
 

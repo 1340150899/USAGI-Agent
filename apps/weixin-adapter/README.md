@@ -2,6 +2,12 @@
 
 Node.js 24+ 进程，通过微信 iLink 接口收发消息，通过 HTTP 接入 USAGI。无需 OpenClaw 宿主、模型或插件运行时。上游 API、扫码和 CDN 源码及 MIT 许可见 [UPSTREAM.md](UPSTREAM.md)。
 
+## 项目来源
+
+微信传输、扫码登录和 CDN 媒体处理代码选自腾讯开源项目 [Tencent/openclaw-weixin](https://github.com/Tencent/openclaw-weixin)，基准提交为 `2f4dcbf57bedf0e17e266fdedcf0cd2dd141b7d3`。本目录替换了账号存储、日志和应用接入逻辑，不需要安装或启动 OpenClaw。
+
+## 安装与启动
+
 在此目录执行：
 
 ```sh
@@ -14,7 +20,24 @@ export USAGI_ADAPTER_TOKEN='与 HTTP 配置一致的投递 token'
 npm run login
 ```
 
-Windows 可用 `npm.cmd`，PowerShell 环境变量语法为 `$env:NAME = 'value'`。扫码建立 Bot 登录或新增用户绑定；登录 token 仅保存在数据目录数据库中。之后 `npm start`，新用户主动向机器人发第一条消息即可建立回复 context token。
+扫码建立 Bot 登录或新增用户绑定；登录 token 仅保存在数据目录数据库中。之后执行 `npm start`，新用户主动向机器人发第一条消息即可建立回复 context token。
+
+## 服务配置
+
+| 字段 | 作用 | 示例/默认值 |
+|---|---|---|
+| `log_dir` | 日志目录 | `log` |
+| `data_dir` | 登录凭据、游标、路由和投递记录目录 | `.usagi/weixin` |
+| `account_ref` | 对外暴露的微信账号引用 | `weixin-main` |
+| `database_environment` | 使用 `adapter-dev.db` 或 `adapter-debug.db` | `debug` |
+| `server_url` | USAGI HTTP Server 地址 | `http://127.0.0.1:8080` |
+| `api_token_env` | 保护 Adapter internal API 的 token 环境变量名 | `USAGI_ADAPTER_TOKEN` |
+| `server_token_env` | 调用 HTTP Server 入站接口的 token 环境变量名 | `USAGI_WEIXIN_TOKEN` |
+| `host` / `port` | Adapter 监听地址 | `127.0.0.1:8090` |
+| `allowed_peers` | 可选的微信用户 ID 白名单 | 未配置时接受全部扫码用户 |
+| `base_url` / `cdn_base_url` | 可选上游 API/CDN 地址 | 使用腾讯默认地址 |
+
+`USAGI_WEIXIN_CONFIG` 用来指定配置文件路径，未设置时读取当前目录的 `config.json`。两个 token 环境变量必须已设置，Adapter API token 至少 24 字符。`config.json` 和数据目录包含私有信息，不要提交到 Git。
 
 同一个 Adapter 可以服务多个扫码微信用户。iLink 会为每个扫码绑定返回独立的 Bot 连接凭据，Adapter 将这些凭据集中保存并并行轮询，对外仍表现为一个 Bot 服务。停止常驻 Adapter 后运行 `npm run bind`，让新用户扫码，再重启服务；新用户首次发消息时，Adapter 会自动保存 UID、回复路由、context token 及其连接归属，HTTP 无需预配置 sender/conversation refs。`allowed_peers` 是可选的显式限制名单；未配置时接受腾讯推送的所有扫码用户。
 

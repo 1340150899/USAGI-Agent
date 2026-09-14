@@ -1,4 +1,4 @@
-"""Policy / Guardrail Ports (design §23)."""
+"""Policy / Guardrail Ports."""
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
@@ -10,7 +10,7 @@ from usagi_agent.types.refs import ArtifactRef, PrincipalRef
 
 @runtime_checkable
 class PolicyEngine(Protocol):
-    """Deterministic, versioned; LLM cannot override (§23.2)."""
+    """Deterministic, versioned; LLM cannot override."""
 
     async def evaluate(
         self, *, principal: PrincipalRef, action: str, tool_name: str | None = None,

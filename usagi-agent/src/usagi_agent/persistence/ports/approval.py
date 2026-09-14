@@ -1,4 +1,4 @@
-"""ApprovalStore Port + ApprovalTask (design §20.4, §23.4, §24.1).
+"""ApprovalStore Port + ApprovalTask.
 
 ``approval_operation_id`` and the business ``(interrupt_id, action_hash)`` are unique
 across all states; replay get-or-create returns the original terminal state, never a new

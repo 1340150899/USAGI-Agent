@@ -1,4 +1,4 @@
-"""Tool/Model execution Stores (design §18.2, §21.7, §10.8).
+"""Tool/Model execution Stores.
 
 Both use the two orthogonal state machines: ``execution_status`` (reserved → executing →
 settled_success/settled_failure/unknown) and ``adoption_status`` (pending →

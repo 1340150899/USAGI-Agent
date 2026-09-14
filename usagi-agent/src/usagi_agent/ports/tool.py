@@ -1,4 +1,4 @@
-"""Tool Ports (design §21.3, §21.5, §16.4).
+"""Tool Ports.
 
 ToolRuntime / ToolSource / ToolExecutionBackend / ToolSelector Protocols +
 RetrieverAdapter. v1 implementations: ToolRuntime is satisfied by
@@ -34,7 +34,7 @@ class ExecutableTool(Protocol):
 
 @runtime_checkable
 class ToolRuntime(Protocol):
-    """Atomic execution service (§21.5); owns no graph control flow."""
+    """Atomic execution service; owns no graph control flow."""
 
     async def execute(
         self,
@@ -77,7 +77,7 @@ class ToolExecutionBackend(Protocol):
 
 @runtime_checkable
 class ToolSelector(Protocol):
-    """Choose the tool declarations a model sees (§21.4)."""
+    """Choose the tool declarations a model sees."""
 
     async def select(
         self, allowed_tools: Iterable[str], token_budget: int
@@ -91,6 +91,6 @@ class ReconcileCapableToolAdapter(Protocol):
 
 @runtime_checkable
 class RetrieverAdapter(Protocol):
-    """Read-only candidate fetcher for RecallSourcesRule (§16.4). Never executes writes."""
+    """Read-only candidate fetcher for RecallSourcesRule. Never executes writes."""
 
     async def retrieve(self, query: RecallQuery, ctx: ToolContext) -> list[RecallCandidate]: ...

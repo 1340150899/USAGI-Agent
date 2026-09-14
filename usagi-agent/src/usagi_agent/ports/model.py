@@ -1,4 +1,4 @@
-"""Model Port (design §18)."""
+"""Model Port."""
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable

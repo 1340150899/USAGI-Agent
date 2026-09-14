@@ -1,4 +1,4 @@
-"""Recall + Context contract types (design §15.3, §16.2, §17.3).
+"""Recall + Context contract types.
 
 Shared by PreRecall, RecallSources, ContextBuild and Model rules; defined centrally so
 Rule modules don't couple to each other.
@@ -120,7 +120,7 @@ class ContextBuildInput(BaseModel):
 
 
 class ContextPack(BaseModel):
-    """Encrypted Artifact content schema (§17.3). State only holds ContextPackRef."""
+    """Encrypted Artifact content schema. State only holds ContextPackRef."""
 
     current_input: ArtifactRef
     conversation: list[Message] = Field(default_factory=list)

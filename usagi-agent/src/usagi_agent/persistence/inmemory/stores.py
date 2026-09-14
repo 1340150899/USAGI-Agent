@@ -1,4 +1,4 @@
-"""InMemory implementations of the remaining Store Ports (§20-24)."""
+"""InMemory implementations of the remaining Store Ports."""
 from __future__ import annotations
 
 import asyncio

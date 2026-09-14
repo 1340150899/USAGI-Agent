@@ -1,4 +1,4 @@
-"""SQLite schema DDL (design §10.6, §24.1, §9 of the application doc).
+"""SQLite schema DDL.
 
 Run-control and checkpoint tables share one database so fenced writes can validate the
 authoritative thread binding, lease owner and fencing token in the same transaction.
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS artifact_blobs (
     payload BLOB NOT NULL
 );
 
--- ThreadControlBinding (§10.6): globally unique thread_id; cross-tenant same thread rejected.
+-- ThreadControlBinding: globally unique thread_id; cross-tenant same thread rejected.
 CREATE TABLE IF NOT EXISTS thread_control_bindings (
     tenant_id      TEXT NOT NULL,
     thread_id      TEXT NOT NULL,
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS thread_control_bindings (
     UNIQUE (thread_id)
 );
 
--- Run control (§10.6): ordinary `version` vs independent `lease_version`.
+-- Run control: ordinary `version` vs independent `lease_version`.
 CREATE TABLE IF NOT EXISTS run_controls (
     run_id                       TEXT PRIMARY KEY,
     tenant_id                    TEXT NOT NULL,

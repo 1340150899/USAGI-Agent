@@ -1,4 +1,4 @@
-"""Model-facing tool declaration and reconciliation records (design §21.3, §21.6)."""
+"""Model-facing tool declaration and reconciliation records."""
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -28,7 +28,7 @@ class ToolSpec(BaseModel):
     description: str
     parameters: dict[str, Any] = Field(default_factory=dict)
     requires_approval: bool = True
-    # Capability metadata (§21.3): risk drives retry/timeout semantics; approval is explicit.
+    # Capability metadata: risk drives retry/timeout semantics; approval is explicit.
     risk: Literal["read", "write", "high_risk_write"] = "read"
     write_safety: WriteSafetyMode | None = None
     # Execution budgets; enforced by ToolRuntime, not by adapters.

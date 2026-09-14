@@ -1,7 +1,7 @@
-"""Shared base types (design §4.1, §8.1).
+"""Shared base types.
 
 These types are referenced by multiple modules and are therefore centrally defined to
-avoid ambiguity (§4.1). They carry NO execution logic and NO cross-module behavioral
+avoid ambiguity. They carry NO execution logic and NO cross-module behavioral
 coupling — any module may import from here, and importing here is the *only* permitted
 cross-module type sharing besides ``usagi_agent.ports`` and ``usagi_agent.api``.
 """

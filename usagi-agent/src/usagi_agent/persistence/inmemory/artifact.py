@@ -1,4 +1,4 @@
-"""InMemory Artifact data plane (§24.4): metadata state machine + blob + manager."""
+"""InMemory Artifact data plane: metadata state machine + blob + manager."""
 from __future__ import annotations
 
 import asyncio
@@ -116,7 +116,7 @@ class InMemoryArtifactMetadataStore(ArtifactMetadataStore):
 
 
 class InMemoryArtifactManager(ArtifactManager):
-    """Orchestrates reserve metadata -> upload blob -> finalize (§24.4)."""
+    """Orchestrates reserve metadata -> upload blob -> finalize."""
 
     def __init__(
         self, metadata_store: ArtifactMetadataStore, blob_store: ArtifactBlobStore,

@@ -1,4 +1,4 @@
-"""Framework rule: govern and execute formed ToolActions (design §20.4 chain).
+"""Framework rule: govern and execute formed ToolActions.
 
 Runs inside the ResultProcess stage. For every formed tool action:
 parse-error feedback -> policy -> approval (interrupt) ->

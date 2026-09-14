@@ -31,8 +31,8 @@ class RecallBundle(BaseModel):
 
     Every recall rule serializes its hits into this shape at the Recall stage;
     ContextBuild only deserializes RecallBundle — no per-source parsing.
-    (Parsed candidate content cannot live in graph state, which holds refs
-    only per §8.2, so the bundle artifact IS the handoff contract.)
+    Parsed candidate content cannot live in graph state because it holds references
+    only, so the bundle artifact is the handoff contract.
     """
 
     source: str

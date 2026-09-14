@@ -40,7 +40,7 @@ class ContextBuildProcessor(StageProcessor):
 
     @property
     def tool_selector(self) -> AllowlistSelector:
-        """ToolSelector seam (§21.4): v1 serves the allowlist verbatim; swap
+        """ToolSelector seam: v1 serves the allowlist verbatim; swap
         the implementation to add relevance ranking or token-budget pruning.
         Built lazily so stage construction never touches runtime state."""
         if self._tool_selector is None:
@@ -84,7 +84,7 @@ class ContextBuildProcessor(StageProcessor):
         Parsing happens at the Recall stage: every rule emits the same
         bundle shape, so this loader only deserializes and groups — no
         per-source logic. (Bundles are artifacts because graph state holds
-        refs only, §8.2.)
+        refs only, .)
         """
         groups: dict[str, list[object]] = {}
         for bundle_ref in (state.get("recall_cache") or {}).values():

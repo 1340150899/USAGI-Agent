@@ -1,7 +1,7 @@
-"""Core reference / identity types (design §4.1).
+"""Core reference / identity types.
 
-All persistent comparison values follow the tenant-scoped HMAC / random opaque id rules
-of §24.5 — public refs never contain raw content hashes, paths or bearer credentials.
+All persistent comparison values use tenant-scoped HMACs or random opaque IDs. Public
+references never contain raw content hashes, paths or bearer credentials.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ MemoryRef = str
 
 
 class ArtifactRef(BaseModel):
-    """Public, non-bearer reference. Only opaque id, type, non-content lineage id (§24.4)."""
+    """Public, non-bearer reference. Only opaque id, type, non-content lineage id."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -35,7 +35,7 @@ class ArtifactRef(BaseModel):
     lineage_id: str | None = None
 
 
-# Semantic Ref aliases (§8.1) — all are public, non-bearer ArtifactRefs. Defined here as
+# Semantic Ref aliases — all are public, non-bearer ArtifactRefs. Defined here as
 # the single source so modules reference them from `types.refs`.
 ContextPackRef = ArtifactRef
 AgentActionRef = ArtifactRef
@@ -49,11 +49,11 @@ ExecutionContextSnapshotRef = ArtifactRef
 
 
 class SettlementArtifactRef(ArtifactRef):
-    """settlement quarantine receipt: unreadable, short TTL, no business lineage (§24.4)."""
+    """settlement quarantine receipt: unreadable, short TTL, no business lineage."""
 
 
 class LineageParent(BaseModel):
-    """A parent source of an Artifact, recorded at reserve time (§24.4)."""
+    """A parent source of an Artifact, recorded at reserve time."""
 
     parent_artifact_id: str
     relation: str = "derived_from"
@@ -74,7 +74,7 @@ class PrincipalRef(BaseModel):
 
 
 class SecretRef(BaseModel):
-    """Credential reference; resolved only at the execution boundary (§4.1)."""
+    """Credential reference; resolved only at the execution boundary."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -83,7 +83,7 @@ class SecretRef(BaseModel):
 
 
 class EncryptedField(BaseModel):
-    """Field-level ciphertext; plaintext never persisted (§4.1)."""
+    """Field-level ciphertext; plaintext never persisted."""
 
     ciphertext: str
     key_ref: SecretRef
@@ -91,7 +91,7 @@ class EncryptedField(BaseModel):
 
 
 class ThreadControlBinding(BaseModel):
-    """Authoritative thread_id <-> control binding (§10.6).
+    """Authoritative thread_id <-> control binding.
 
     v1 single-tenant degenerates to thread_id <-> run_id + fixed tenant; the global
     UNIQUE(thread_id) guard is still implemented so cross-tenant same-thread is rejected.

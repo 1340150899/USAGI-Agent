@@ -140,8 +140,7 @@ triggered long-term extraction, conflict resolution and recall. It depends only 
 LangGraph `BaseStore`; all four memory lifecycles are persisted in the configured
 SQLite database.
 
-See `docs/generic-agent-framework.md` for the authoritative design. This package is the
-framework Kernel + Capabilities + Ports; it must not contain any business concept
+This package contains the framework Kernel, Capabilities, and Ports; it must not contain any business concept
 (xiaohongshu, wechat, post, etc.).
 
 ## Architecture rules (enforced across this package)
@@ -156,6 +155,6 @@ framework Kernel + Capabilities + Ports; it must not contain any business concep
 - **Static Catalog**: all Specs / Adapters / compiled graphs are built at Bootstrap and
   stored in a read-only `RuntimeBundleCatalog`. A Run only fetches a bundle by
   `scenario_key`; it never parses Specs, creates Adapters or compiles graphs.
-- **LangGraph is the only execution engine** (design §3.1): `PipelineCompiler` turns
+- **LangGraph is the only execution engine**: `PipelineCompiler` turns
   Specs into LangGraph `StateGraph` / subgraphs. No second graph runtime.
-- **State holds only low-sensitivity routing fields + ArtifactRef** (design §8.2).
+- **State holds only low-sensitivity routing fields + ArtifactRef**.

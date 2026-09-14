@@ -1,9 +1,9 @@
-"""Artifact data-plane Ports (design §24.4).
+"""Artifact data-plane Ports.
 
 ArtifactRef is not a bearer credential. Every operation goes through ArtifactManager and
 verifies tenant/subject/scope/tombstone/purpose. Metadata + lineage seed are reserved in
 one DB transaction *before* the blob is uploaded; reliability comes from idempotent
-operation IDs, the state machine, outbox and a sweeper (§24.4).
+operation IDs, the state machine, outbox and a sweeper.
 """
 from __future__ import annotations
 

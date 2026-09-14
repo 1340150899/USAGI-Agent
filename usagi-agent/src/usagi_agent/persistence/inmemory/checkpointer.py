@@ -1,4 +1,4 @@
-"""InMemory FencedCheckpointer (design §10.6).
+"""InMemory FencedCheckpointer.
 
 A *custom* LangGraph ``BaseCheckpointSaver`` (not a decorator). ``aput``/``aput_writes``
 verify the live fencing gate (tenant/run/fencing_token/lease owner/expiry/status) before

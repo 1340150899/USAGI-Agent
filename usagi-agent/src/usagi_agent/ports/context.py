@@ -1,4 +1,4 @@
-"""Execution-context Ports (design §11.6, §24.3).
+"""Execution-context Ports.
 
 Narrow contexts passed into capability adapters. Shared by every capability Port, so
 defined in their own file rather than mixed into any one capability.
@@ -15,7 +15,7 @@ HealthStatus = Literal["healthy", "degraded", "unhealthy"]
 
 
 class GovernedExecutionContext(BaseModel):
-    """Adapted-to by RunContext / ErasureExecutionContext / etc. (§24.3)."""
+    """Adapted-to by RunContext / ErasureExecutionContext / etc.."""
 
     tenant_id: str
     principal: PrincipalRef

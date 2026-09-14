@@ -1,8 +1,8 @@
-"""Default PolicyEngine + Guardrail (design §23).
+"""Default PolicyEngine + Guardrail.
 
-Policy is deterministic and versioned; the LLM cannot override it (§23.2). The default
+Policy is deterministic and versioned; the LLM cannot override it. The default
 engine allows actions; the Tool module enforces ToolSpec.requires_approval. Guardrails are
-structured pass/fail (§23.3).
+structured pass/fail.
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ class DefaultPolicyEngine(PolicyEngine):
 
 
 class DefaultGuardrail:
-    """All four guardrails (input/pre-model/action/output) default to pass (§23.3)."""
+    """All four guardrails (input/pre-model/action/output) default to pass."""
 
     async def check(self, payload_ref, ctx: ToolContext) -> GuardrailResult:
         return GuardrailResult(passed=True, reason_codes=[])
