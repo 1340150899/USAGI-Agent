@@ -4,6 +4,8 @@ from usagi_agent.prompts.catalog import (
     CONTEXT_COMPACTION_PROMPT,
     PROMPTS_BY_AGENT_ID,
     RESEARCH_WRITER_PROMPT,
+    STRUCTURED_OUTPUT_PROMPT,
+    STRUCTURED_OUTPUT_RETRY_PROMPT,
     WECHAT_MATERIAL_PROMPT,
     prompt_for_agent,
 )
@@ -13,6 +15,8 @@ __all__ = [
     "CONTEXT_COMPACTION_PROMPT",
     "PROMPTS_BY_AGENT_ID",
     "RESEARCH_WRITER_PROMPT",
+    "STRUCTURED_OUTPUT_PROMPT",
+    "STRUCTURED_OUTPUT_RETRY_PROMPT",
     "WECHAT_MATERIAL_PROMPT",
     "PromptSpec",
     "prompt_for_agent",

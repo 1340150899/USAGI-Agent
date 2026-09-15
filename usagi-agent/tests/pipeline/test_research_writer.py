@@ -273,9 +273,9 @@ async def test_rejected_approval_returns_denied_observation_to_model(tmp_path):
     runtime.agent_manager.set_model_adapter(model)
     runtime.policy_engine = _ApprovalPolicy()
     runtime.tool_manager.register(tool)
-    create_research_writer_agent(runtime.agent_manager)
-    ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
     server = Server(runtime)
+    create_research_writer_agent(server)
+    ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
     principal = PrincipalRef(principal_kind="user", principal_opaque_id="rejector")
     auth = AuthContext(
         principal=principal,
@@ -370,9 +370,9 @@ async def test_rejecting_multiple_tools_repeats_approval_then_returns_reply(tmp_
     runtime.agent_manager.set_model_adapter(model)
     runtime.policy_engine = _ApprovalPolicy()
     runtime.tool_manager.register(tool)
-    create_research_writer_agent(runtime.agent_manager)
-    ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
     server = Server(runtime)
+    create_research_writer_agent(server)
+    ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
     principal = PrincipalRef(principal_kind="user", principal_opaque_id="multi-rejector")
     auth = AuthContext(
         principal=principal,
@@ -434,13 +434,13 @@ async def test_tool_call_limit_stops_before_an_extra_execution(tmp_path):
         BootstrapSettings(model_execution_mode="scripted", sqlite_path=str(tmp_path / "runtime.db"))
     )
     runtime.tool_manager.register(tool)
-    create_research_writer_agent(runtime.agent_manager)
+    server = Server(runtime)
+    create_research_writer_agent(server)
     scenario = SCENARIO_CONFIGS[0]
     limited = scenario.model_copy(update={
         "pipeline": scenario.pipeline.model_copy(update={"max_tool_calls": 0})
     })
     ScenarioPipelineInitializer.init(runtime, (limited,))
-    server = Server(runtime)
     handle = await server.create_session(_request("tool-limit"))
     assert handle.outcome.kind == "failed"
     assert tool.calls == 0

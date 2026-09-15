@@ -23,7 +23,7 @@ def test_agent_spec_requires_an_explicit_model():
     assert "prompt" not in AgentSpec.model_fields
     with pytest.raises(ValidationError):
         AgentSpec(  # pyright: ignore[reportCallIssue]
-            id="agent", input_schema="input", output_schema="output",
+            id="agent", input_schema="input",
         )
 
 
@@ -49,6 +49,8 @@ def test_model_catalog_is_static_and_not_registered_in_agent_manager():
     assert DEEPSEEK_V4_FLASH_VISION_EXP_MODEL in MODEL_SPECS
     assert not hasattr(manager, "register_model")
     assert not hasattr(manager, "get_model")
+    assert not hasattr(manager, "create_agent")
+    assert not hasattr(manager, "register_output_schema")
 
 
 def test_model_boundary_keeps_raw_calls_until_result_process():
@@ -64,12 +66,9 @@ async def test_agent_manager_owns_live_or_scripted_execution_switch(monkeypatch)
     live = AgentManager(model_execution_mode="live")
     scripted = AgentManager(model_execution_mode="scripted")
     for manager, suffix in ((live, "live"), (scripted, "scripted")):
-        manager.create_agent(
-            id=f"agent-{suffix}",
-            input_schema="input",
-            output_schema="output",
-            model=GLM_5_2_MODEL,
-        )
+        manager.register(AgentSpec(
+            id=f"agent-{suffix}", input_schema="input", model=GLM_5_2_MODEL
+        ))
     assert await live.health() == "degraded"
     assert await scripted.health() == "healthy"
 
@@ -85,12 +84,9 @@ async def test_agents_hold_models_and_manager_routes_and_accounts_by_agent():
         ModelSpec(id="m2", provider_model="provider-m2"),
     )
     for agent_id, model in (("a1", models[0]), ("a2", models[1])):
-        manager.create_agent(
-            id=agent_id,
-            input_schema="input",
-            output_schema="output",
-            model=model,
-        )
+        manager.register(AgentSpec(
+            id=agent_id, input_schema="input", model=model
+        ))
     context = RunContext(
         run_id="run", thread_id="thread", tenant_id="tenant",
         principal=PrincipalRef(principal_kind="user", principal_opaque_id="user"),

@@ -47,7 +47,6 @@ class SqliteSessionStore:
                     raise PermissionError(f"session {session_id!r} belongs to another user")
                 return record
         return await asyncio.to_thread(operation)
-
     async def get(self, session_id: str) -> SessionRecord | None:
         def operation() -> SessionRecord | None:
             with sqlite3.connect(self.path) as db:

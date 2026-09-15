@@ -60,6 +60,27 @@ CONTEXT_COMPACTION_PROMPT = PromptSpec(
     ),
 )
 
+STRUCTURED_OUTPUT_PROMPT = PromptSpec(
+    id="usagi.structured_output_prompt@1.0.0",
+    template=(
+        "This session requires a structured final response.\n"
+        "When you are ready to finish, call the {terminal_tool_name} tool exactly once.\n"
+        "The tool arguments are the final result and must satisfy its JSON Schema.\n"
+        "Do not return the final result as plain assistant text or Markdown.\n"
+        "If validation fails, correct the arguments and call the tool again.\n"
+        "Do not claim acceptance unless the tool result says success."
+    ),
+)
+
+STRUCTURED_OUTPUT_RETRY_PROMPT = PromptSpec(
+    id="usagi.structured_output_retry_prompt@1.0.0",
+    template=(
+        "This session has a registered output JSON Schema. "
+        "A normal assistant response cannot complete the run. "
+        "Call {terminal_tool_name} with the final result."
+    ),
+)
+
 PROMPTS_BY_AGENT_ID: dict[str, PromptSpec] = {
     "research_writer": RESEARCH_WRITER_PROMPT,
 }
@@ -76,6 +97,8 @@ __all__ = [
     "CONTEXT_COMPACTION_PROMPT",
     "PROMPTS_BY_AGENT_ID",
     "RESEARCH_WRITER_PROMPT",
+    "STRUCTURED_OUTPUT_PROMPT",
+    "STRUCTURED_OUTPUT_RETRY_PROMPT",
     "WECHAT_MATERIAL_PROMPT",
     "prompt_for_agent",
 ]

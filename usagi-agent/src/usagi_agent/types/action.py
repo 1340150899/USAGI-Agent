@@ -31,7 +31,6 @@ class SafeErrorRecord(BaseModel):
 class FinalAction(BaseModel):
     kind: Literal["final"] = "final"
     output_ref: ArtifactRef
-    output_schema: SchemaRef
 
 
 class ToolAction(BaseModel):

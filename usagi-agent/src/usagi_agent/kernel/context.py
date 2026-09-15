@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Mapping
 
 from usagi_agent.ports import GovernedExecutionContext, ToolContext
+from usagi_agent.agents.schemas import OutputContract
 from usagi_agent.types.refs import PrincipalRef
 
 
@@ -28,6 +29,7 @@ class RunContext:
     fencing_token: int
     trace_parent: str | None = None
     session_id: str | None = None
+    output_contract: OutputContract | None = None
 
     @property
     def memory_session_id(self) -> str:

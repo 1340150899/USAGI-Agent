@@ -33,6 +33,7 @@ from usagi_agent.api.errors import (
     PolicyDeniedError,
     UsagiError,
 )
+from usagi_agent.kernel.context import AuthContext, RunContext
 from usagi_agent.observability import ObservabilityProvider, span
 from usagi_agent.persistence.backend import InfrastructurePorts
 from usagi_agent.persistence.ports.outbox import DurableOutboxEvent
@@ -41,7 +42,9 @@ from usagi_agent.persistence.ports.run_lifecycle import (
     RunControlState,
     RunStartRequestRecord,
 )
-from usagi_agent.kernel.context import AuthContext, RunContext
+from usagi_agent.pipelines.artifacts import put_model
+from usagi_agent.agents.schemas import OutputContract
+from usagi_agent.sessions.types import SessionMessage
 from usagi_agent.types.budget import BudgetUsage
 from usagi_agent.types.refs import (
     ArtifactOwner,
@@ -49,8 +52,8 @@ from usagi_agent.types.refs import (
     PrincipalRef,
 )
 from usagi_agent.types.run import (
-    CancellationReasonCode,
     ApprovalResume,
+    CancellationReasonCode,
     Completed,
     Failed,
     InterruptDescriptor,
@@ -62,7 +65,6 @@ from usagi_agent.types.run import (
     Suspended,
 )
 from usagi_agent.types.settlement import FencingGate
-from usagi_agent.sessions.types import SessionMessage
 
 _LEASE_TTL_SECONDS = 60
 log = logging.getLogger(__name__)
@@ -183,7 +185,7 @@ class RunControlManager:
         state = await self._ports.run_control_store.get(run_id)
         if state is None:
             raise UsagiError(f"run_control {run_id} not found")
-        new = state.model_copy(update={"run_status": "failed"})
+        new = state.model_copy(update={"run_status": "failed", "reason_codes": reason_codes})
         return await self._ports.run_control_store.cas_update(run_id, state.version, new)
 
     async def request_cancel(self, run_id: str, reason: CancellationReasonCode) -> RunControlState:
@@ -366,6 +368,12 @@ class _KernelRuntime:
         if snapshot is None:
             raise UsagiError(f"execution context {run_id} not found")
         scenario = self._runtime.scenario_registry.get(snapshot.scenario_key)
+        session_id = approval.session_id
+        if session_id is None:
+            raise UsagiError("approval is not associated with a session")
+        output_contract = self._runtime.agent_manager.output_contract(
+            scenario.config.agent_id
+        )
         gate = FencingGate(
             tenant_id=self._tenant,
             control_kind="run",
@@ -388,7 +396,8 @@ class _KernelRuntime:
                     authorization_scope=snapshot.authorization_scope,
                     deadline=snapshot.absolute_deadline,
                     fencing_token=state.fencing_token,
-                    session_id=approval.session_id,
+                    session_id=session_id,
+                    output_contract=output_contract,
                 ),
             }
         }
@@ -466,6 +475,9 @@ class _KernelRuntime:
 
         # First request: resolve immutable Bundle by scenario_key.
         scenario = self._runtime.scenario_registry.get(request.scenario_key)
+        output_contract = self._runtime.agent_manager.output_contract(
+            scenario.config.agent_id
+        )
         bundle_fp = f"{self._runtime.settings.service_version}:{scenario.checksum}"
 
         run_id = _new_id("run")
@@ -491,7 +503,6 @@ class _KernelRuntime:
             operation_id=_new_id("op"), owner=owner, lineage=[], payload=_payload(),
             purpose="run_execution",
         )
-
         # Atomic create (dev: sequential store calls; real impl = one DB transaction).
         record = RunStartRequestRecord(
             tenant_id=self._tenant, idempotency_namespace=namespace,
@@ -549,7 +560,7 @@ class _KernelRuntime:
         ) as telemetry:
             await self._drive(
                 run_id, scenario, input_ref, request, auth_context,
-                thread_id, session_id,
+                thread_id, session_id, output_contract,
             )
             final_state = await self._ports.run_control_store.get(run_id)
             if final_state is not None:
@@ -560,7 +571,7 @@ class _KernelRuntime:
     async def _drive(
         self, run_id: str, scenario, input_ref: ArtifactRef,
         request: RunStartRequest, auth_context: AuthContext, thread_id: str,
-        session_id: str,
+        session_id: str, output_contract: OutputContract | None,
     ) -> None:
         state = await self._ports.run_control_store.get(run_id)
         if state is None:
@@ -584,15 +595,21 @@ class _KernelRuntime:
                     deadline=request.options.absolute_deadline,
                     fencing_token=state.fencing_token,
                     session_id=session_id,
+                    output_contract=output_contract,
                 ),
             }
         }
         # Pass one opaque request reference into the graph. PreRecall owns all
         # interpretation of business fields, modalities and request options.
-        input_state = {
+        input_state: dict[str, Any] = {
             "request_ref": input_ref.artifact_id,
             "run_id": run_id,
         }
+        if output_contract is not None:
+            input_state.update({
+                "output_schema_checksum": output_contract.schema_checksum,
+                "structured_output_attempts": 0,
+            })
 
         heartbeat = asyncio.create_task(
             self._keep_lease_alive(run_id, state.lease_owner or "", state.fencing_token)
@@ -665,7 +682,14 @@ class _KernelRuntime:
         if isinstance(terminal, dict) and terminal.get("pass_disposition") in {
             "run_failed", "next_pass"
         }:
-            await self._rcm.to_failed(run_id, ["pipeline.run_failed"])
+            reasons = terminal.get("reason_codes")
+            if not isinstance(reasons, list) or not reasons:
+                reasons = [
+                    "structured_output.retry_exhausted"
+                    if terminal.get("output_schema_checksum")
+                    else "pipeline.run_failed"
+                ]
+            await self._rcm.to_failed(run_id, [str(reason) for reason in reasons])
             return
         final_ref = self._extract_final_ref(terminal)
         if final_ref is None and terminal is not result:
@@ -724,6 +748,7 @@ class _KernelRuntime:
         self, session_id: str, handle: RunHandle, *, approval=None
     ) -> SessionMessage:
         outcome = handle.outcome
+        structured_output = None
         if isinstance(outcome, Suspended):
             if approval is None:
                 tasks = await self._ports.approval_store.list_pending(handle.run_id)
@@ -738,9 +763,30 @@ class _KernelRuntime:
             stream = await self._ports.artifact_manager.get(
                 outcome.result_ref, "run_execution"
             )
-            message = b"".join([part async for part in stream]).decode(
+            raw = b"".join([part async for part in stream])
+            message = raw.decode(
                 "utf-8", errors="replace"
             )
+            snapshot = await self._ports.execution_context_store.get(handle.run_id)
+            output_contract = None
+            if snapshot is not None:
+                scenario = self._runtime.scenario_registry.get(snapshot.scenario_key)
+                output_contract = self._runtime.agent_manager.output_contract(
+                    scenario.config.agent_id
+                )
+            if output_contract is not None:
+                try:
+                    from usagi_agent.types.action import ToolObservation
+                    observation = ToolObservation.model_validate_json(raw)
+                    candidate = (observation.output or {}).get("structured_output")
+                    if isinstance(candidate, dict):
+                        structured_output = candidate
+                        display = candidate.get("message")
+                        message = display if isinstance(display, str) else json.dumps(
+                            candidate, ensure_ascii=False
+                        )
+                except (ValueError, TypeError):
+                    message = "structured output result is corrupted"
             status = "idle"
         elif isinstance(outcome, Failed):
             message = "会话处理失败：" + ", ".join(outcome.reason_codes)
@@ -748,12 +794,15 @@ class _KernelRuntime:
         else:
             message = f"会话状态：{outcome.kind}"
             status = "idle"
+        if not isinstance(outcome, Completed):
+            structured_output = None
         await self._runtime.session_manager.set_status(session_id, status)
         return SessionMessage(
             session_id=session_id,
             message=message,
             run_id=handle.run_id,
             outcome=outcome,
+            structured_output=structured_output,
         )
 
     def _resolve_auth(self, auth: AuthContext | None) -> AuthContext:
@@ -830,7 +879,10 @@ class _KernelRuntime:
                 )
             return Completed(run_id=run_id, completed_at=state.cancelled_at or _now(), result_ref=ref)
         if status == "failed":
-            return Failed(run_id=run_id, failed_at=_now(), reason_codes=["run.failed"])
+            return Failed(
+                run_id=run_id, failed_at=_now(),
+                reason_codes=state.reason_codes or ["run.failed"],
+            )
         if status == "cancelled":
             from usagi_agent.types.run import Cancelled
 

@@ -1,53 +1,52 @@
-"""Structural argument validation against a ToolSpec parameter schema.
+"""JSON-Schema validation shared by every registered tool."""
 
-Deliberately lightweight (no external dependency): it enforces the subset of
-JSON Schema the framework's tool declarations actually use — ``type: object``
-with ``properties`` / ``required`` / ``additionalProperties`` / ``enum``.
-Anything the validator does not understand is skipped, never guessed.
-"""
 from __future__ import annotations
 
-from typing import Any
+import json
+from functools import lru_cache
+from typing import Any, cast
 
-_JSON_TYPES: dict[str, tuple[type, ...]] = {
-    "string": (str,),
-    "number": (int, float),
-    "integer": (int,),
-    "boolean": (bool,),
-    "object": (dict,),
-    "array": (list,),
-}
+from usagi_agent.types.json_schema import (
+    compile_validator,
+    format_validation_error,
+    validate_schema,
+)
+
+
+def validate_parameter_schema(schema: dict[str, Any]) -> dict[str, object]:
+    return validate_schema(schema)
 
 
 def validate_arguments(
     schema: dict[str, Any], arguments: dict[str, object]
 ) -> str | None:
-    """Return a safe, model-readable reason when arguments are invalid."""
-
-    if not isinstance(schema, dict) or schema.get("type") != "object":
+    payload = json.dumps(schema, sort_keys=True, separators=(",", ":"))
+    validator = _compiled_validator(payload)
+    errors = sorted(
+        validator.iter_errors(cast(Any, arguments)),
+        key=lambda error: (0 if error.validator == "required" else 1, list(error.path)),
+    )
+    if not errors:
         return None
-    properties = schema.get("properties")
-    properties = properties if isinstance(properties, dict) else {}
-    for name in schema.get("required") or ():
-        if name not in arguments:
-            return f"missing required argument: {name}"
-    if schema.get("additionalProperties") is False:
-        for name in arguments:
-            if name not in properties:
-                return f"unexpected argument: {name}"
-    for name, value in arguments.items():
-        declaration = properties.get(name)
-        if not isinstance(declaration, dict):
-            continue
-        enum = declaration.get("enum")
-        if isinstance(enum, list) and enum and value not in enum:
-            return f"argument {name} must be one of: {', '.join(map(str, enum))}"
-        expected = _JSON_TYPES.get(str(declaration.get("type")))
-        if expected is None:
-            continue
-        # bool is a subclass of int; keep it out of number/integer slots.
-        if isinstance(value, bool) and bool not in expected:
-            return f"argument {name} must be {declaration.get('type')}"
-        if not isinstance(value, expected):
-            return f"argument {name} must be {declaration.get('type')}"
-    return None
+    rendered: list[str] = []
+    for error in errors[:8]:
+        if error.validator == "required":
+            missing = next(
+                (name for name in error.validator_value if name not in error.instance),
+                "unknown",
+            )
+            rendered.append(f"missing required argument: {missing}")
+        elif error.validator == "additionalProperties":
+            properties = schema.get("properties") or {}
+            unexpected = next(
+                (name for name in arguments if name not in properties), "unknown"
+            )
+            rendered.append(f"unexpected argument: {unexpected}")
+        else:
+            rendered.append(format_validation_error(error))
+    return "; ".join(rendered)[:2_000]
+
+
+@lru_cache(maxsize=256)
+def _compiled_validator(payload: str):
+    return compile_validator(json.loads(payload))

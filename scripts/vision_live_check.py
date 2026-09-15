@@ -34,14 +34,13 @@ async def main() -> None:
             sqlite_path=".pytest-tmp/vision-live.db",
         )
     )
-    runtime.agent_manager.create_agent(
+    server = Server(runtime)
+    server.create_agent(
         id="research_writer",
         input_schema="usagi.agent_request@1.0.0",
-        output_schema="usagi.final_output@1.0.0",
         model=DEFAULT_MODEL,
     )
     ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
-    server = Server(runtime)
     try:
         parts = []
         if image_path:

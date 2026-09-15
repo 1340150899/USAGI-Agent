@@ -3,8 +3,13 @@ from __future__ import annotations
 
 import logging
 
+from usagi_agent.agents import AgentSpec, OutputContract, OutputSchemaDefinition
+from usagi_agent.api.errors import DuplicateToolError, UnknownToolError
 from usagi_agent.observability import operation
 from usagi_agent.sessions.types import SessionMessage
+from usagi_agent.tools.builtin import StructuredOutputTool
+from usagi_agent.types.model import ModelSpec
+from usagi_agent.types.refs import SchemaRef
 from usagi_agent.types.run import CancellationReasonCode, ResumeEnvelope, RunHandle, RunOutcome, RunStartRequest
 
 log = logging.getLogger(__name__)
@@ -12,13 +17,18 @@ log = logging.getLogger(__name__)
 
 class Server:
     def __init__(self, runtime) -> None:
-        runtime.validate_ready()
         self._runtime = runtime
         self._ready = True
 
     @property
     def ready(self) -> bool:
-        return self._ready
+        if not self._ready:
+            return False
+        try:
+            self._runtime.validate_ready()
+        except RuntimeError:
+            return False
+        return True
 
     @property
     def runtime(self):
@@ -28,9 +38,62 @@ class Server:
     def erasure(self):
         return self._runtime.erasure_coordinator
 
+    def _install_output_schema(
+        self, output_schema: OutputSchemaDefinition
+    ) -> OutputContract:
+        contract = self._runtime.agent_manager.compile_output_schema(
+            output_schema.ref,
+            name=output_schema.name,
+            schema=output_schema.json_schema,
+            max_retries=output_schema.max_retries,
+        )
+        adapter = StructuredOutputTool(
+            name=contract.terminal_tool_name,
+            schema=contract.json_schema,
+            schema_name=contract.name,
+            schema_checksum=contract.schema_checksum,
+        )
+        try:
+            registered = self._runtime.tool_manager.get_spec(
+                contract.terminal_tool_name
+            )
+        except UnknownToolError:
+            self._runtime.tool_manager.register(adapter)
+        else:
+            if registered != adapter.spec:
+                raise DuplicateToolError(contract.terminal_tool_name)
+        return contract
+
+    def create_agent(
+        self,
+        *,
+        id: str,
+        input_schema: SchemaRef,
+        model: ModelSpec,
+        output_schema: OutputSchemaDefinition | None = None,
+        allowed_tools: tuple[str, ...] = (),
+    ) -> AgentSpec:
+        """Register an Agent, including its initial output schema when supplied."""
+        effective_tools = list(allowed_tools)
+        output_schema_ref = None
+        if output_schema is not None:
+            contract = self._install_output_schema(output_schema)
+            output_schema_ref = output_schema.ref
+            effective_tools.append(contract.terminal_tool_name)
+        return self._runtime.agent_manager.register(
+            AgentSpec(
+                id=id,
+                input_schema=input_schema,
+                output_schema=output_schema_ref,
+                model=model,
+                allowed_tools=tuple(dict.fromkeys(effective_tools)),
+            )
+        )
+
     async def create_session(
         self, request: RunStartRequest, *, auth=None
     ) -> SessionMessage:
+        self._runtime.validate_ready()
         log.info("agent_interface_called operation=create_session scenario=%s", request.scenario_key)
         with operation(
             self._runtime.observability, "agent.request",
@@ -48,6 +111,7 @@ class Server:
     async def continue_session(
         self, session_id: str, request: RunStartRequest, *, auth=None
     ) -> SessionMessage:
+        self._runtime.validate_ready()
         log.info("agent_interface_called operation=continue_session session_id=%s", session_id)
         with operation(
             self._runtime.observability, "agent.request",

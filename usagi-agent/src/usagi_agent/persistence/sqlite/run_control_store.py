@@ -6,6 +6,7 @@ separate from ``lease_version`` CAS.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any
 
@@ -43,9 +44,9 @@ class SqliteRunControlStore:
                 "run_id, tenant_id, version, lease_version, run_status, "
                 "suspended_checkpoint_id, interrupt_set_digest, accepted_resume_attempt_id, budget_used, "
                 "cancel_requested_at, cancelled_at, cancellation_reason_code, cancellation_detail_ref, "
-                "lease_owner, lease_expires_at, fencing_token, final_result_ref"
+                "lease_owner, lease_expires_at, fencing_token, final_result_ref, reason_codes"
             )
-            placeholders = ",".join(["?"] * 17)
+            placeholders = ",".join(["?"] * 18)
             try:
                 await conn.execute(
                     f"INSERT INTO run_controls ({cols}) VALUES ({placeholders})",
@@ -73,14 +74,15 @@ class SqliteRunControlStore:
                 "UPDATE run_controls SET version=?, run_status=?, suspended_checkpoint_id=?, "
                 "interrupt_set_digest=?, accepted_resume_attempt_id=?, budget_used=?, "
                 "cancel_requested_at=?, cancelled_at=?, cancellation_reason_code=?, "
-                "cancellation_detail_ref=?, final_result_ref=? WHERE run_id=?",
+                "cancellation_detail_ref=?, final_result_ref=?, reason_codes=? WHERE run_id=?",
                 (bumped.version, bumped.run_status, bumped.suspended_checkpoint_id,
                  bumped.interrupt_set_digest, bumped.accepted_resume_attempt_id,
                  bumped.budget_used.model_dump_json(), _iso(bumped.cancel_requested_at),
                  _iso(bumped.cancelled_at),
                  bumped.cancellation_reason_code.value if bumped.cancellation_reason_code else None,
                  bumped.cancellation_detail_ref.artifact_id if bumped.cancellation_detail_ref else None,
-                 bumped.final_result_ref.model_dump_json() if bumped.final_result_ref else None, run_id),
+                 bumped.final_result_ref.model_dump_json() if bumped.final_result_ref else None,
+                 json.dumps(bumped.reason_codes), run_id),
             )
             await conn.commit()
         return bumped
@@ -119,18 +121,19 @@ class SqliteRunControlStore:
             state.cancellation_detail_ref.artifact_id if state.cancellation_detail_ref else None,
             state.lease_owner, _iso(state.lease_expires_at), state.fencing_token,
             state.final_result_ref.model_dump_json() if state.final_result_ref else None,
+            json.dumps(state.reason_codes),
         )
 
     @staticmethod
     def _row_to_state(row: Any) -> RunControlState:
-        from usagi_agent.types.run import CancellationReasonCode
         from usagi_agent.types.refs import ArtifactRef
+        from usagi_agent.types.run import CancellationReasonCode
 
         cols = [
             "run_id", "tenant_id", "version", "lease_version", "run_status",
             "suspended_checkpoint_id", "interrupt_set_digest", "accepted_resume_attempt_id",
             "budget_used", "cancel_requested_at", "cancelled_at", "cancellation_reason_code",
-            "cancellation_detail_ref", "lease_owner", "lease_expires_at", "fencing_token", "final_result_ref",
+            "cancellation_detail_ref", "lease_owner", "lease_expires_at", "fencing_token", "final_result_ref", "reason_codes",
         ]
         d = dict(zip(cols, row))
         return RunControlState(
@@ -144,6 +147,7 @@ class SqliteRunControlStore:
             cancelled_at=datetime.fromisoformat(d["cancelled_at"]) if d["cancelled_at"] else None,
             cancellation_reason_code=CancellationReasonCode(d["cancellation_reason_code"]) if d["cancellation_reason_code"] else None,
             final_result_ref=ArtifactRef.model_validate_json(d["final_result_ref"]) if d.get("final_result_ref") else None,
+            reason_codes=json.loads(d.get("reason_codes") or "[]"),
             fencing_token=d["fencing_token"],
             lease_owner=d["lease_owner"],
             lease_expires_at=datetime.fromisoformat(d["lease_expires_at"]) if d["lease_expires_at"] else None,

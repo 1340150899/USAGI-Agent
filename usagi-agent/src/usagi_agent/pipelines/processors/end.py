@@ -17,10 +17,12 @@ from usagi_agent.pipelines.rules import EndAdapterConfig
 from usagi_agent.pipelines.rules.stage import (
     EndRuleInput,
     EndRuleOutput,
-    RuleExecutionError,
     EndStagePatch,
+    RuleExecutionError,
 )
-from usagi_agent.types.action import FinalAction
+from usagi_agent.types.action import FinalAction, ToolObservation
+from usagi_agent.prompts import STRUCTURED_OUTPUT_RETRY_PROMPT
+from usagi_agent.types.content import merge_content_parts
 
 if TYPE_CHECKING:
     from usagi_agent.agents.spec import AgentSpec
@@ -46,6 +48,7 @@ class EndProcessor(StageProcessor):
             pass_disposition=state.get("pass_disposition", ""),
             tool_observation_refs=tuple(state.get("tool_observation_refs", [])),
             final_output_ref=state.get("final_output_ref", ""),
+            structured_output_attempts=state.get("structured_output_attempts", 0),
         )
         stage_patch: EndStagePatch = {}
         new_observation_refs: list[str] = []
@@ -95,7 +98,68 @@ class EndProcessor(StageProcessor):
                 )
             if result.final_output_ref is not None:
                 stage_patch["final_output_ref"] = result.final_output_ref
+        if context.output_contract is not None and stage_patch.get("pass_disposition") != "run_failed":
+            structured = await self._structured_end(rule_input, context)
+            stage_patch["pass_disposition"] = structured.pass_disposition
+            stage_patch["iteration"] = structured.iteration
+            if structured.final_output_ref is not None:
+                stage_patch["final_output_ref"] = structured.final_output_ref
+            if structured.structured_output_attempts is not None:
+                stage_patch["structured_output_attempts"] = structured.structured_output_attempts
+            if structured.structured_output_observation_ref is not None:
+                stage_patch["structured_output_observation_ref"] = structured.structured_output_observation_ref
+            if structured.reason_codes:
+                stage_patch["reason_codes"] = list(structured.reason_codes)
         return stage_patch
+
+    async def _structured_end(self, input: EndRuleInput, context: RunContext) -> EndRuleOutput:
+        """Require a successful terminal-tool observation before completion."""
+        contract = context.output_contract
+        assert contract is not None
+        failed = 0
+        for ref in reversed(input.tool_observation_refs):
+            observation = await get_model(
+                self.runtime.persistence.artifact_manager, ref, ToolObservation
+            )
+            if observation is None or observation.tool_name != contract.terminal_tool_name:
+                continue
+            if observation.status == "success" and observation.output:
+                output = observation.output
+                if output.get("accepted") is True and output.get("schema_checksum") == contract.schema_checksum:
+                    return EndRuleOutput(
+                        pass_disposition="run_completed",
+                        iteration=input.iteration + 1,
+                        final_output_ref=ref,
+                        structured_output_attempts=max(input.structured_output_attempts, failed),
+                        structured_output_observation_ref=ref,
+                    )
+            failed += 1
+        attempts = max(input.structured_output_attempts, failed)
+        if input.action_type in {"final", "failure"}:
+            attempts += 1
+            await self.runtime.memory_manager.append_event(
+                session_id=context.memory_session_id,
+                role="system",
+                content_parts=merge_content_parts(
+                    text=STRUCTURED_OUTPUT_RETRY_PROMPT.render(
+                        {"terminal_tool_name": contract.terminal_tool_name}
+                    )
+                ),
+                ctx=context.to_tool_context(),
+                metadata={"run_id": context.run_id, "reason_code": "structured_output.missing"},
+                operation_id=f"structured-output-feedback:{context.run_id}:{attempts}",
+            )
+        if attempts > contract.max_retries:
+            return EndRuleOutput(
+                pass_disposition="run_failed", iteration=input.iteration + 1,
+                structured_output_attempts=attempts,
+                reason_codes=("structured_output.retry_exhausted",),
+            )
+        return EndRuleOutput(
+            pass_disposition="next_pass", iteration=input.iteration + 1,
+            structured_output_attempts=attempts,
+            reason_codes=("structured_output.missing",) if input.action_type in {"final", "failure"} else (),
+        )
 
     async def _default_end(self, input: EndRuleInput, context: RunContext) -> EndRuleOutput:
         iteration = input.iteration + 1

@@ -195,7 +195,7 @@ class OpenAICompatibleModelAdapter:
                 tool_choice="auto",
                 parallel_tool_calls=True,
             )
-        if request.structured_output:
+        if request.response_format == "json_object":
             kwargs["response_format"] = {"type": "json_object"}
         completion = await self._get_client().chat.completions.create(**kwargs)
         choice = completion.choices[0]
@@ -376,7 +376,7 @@ class ResponsesModelAdapter:
                 tool_choice="auto",
                 parallel_tool_calls=True,
             )
-        if request.structured_output:
+        if request.response_format == "json_object":
             kwargs["text"] = {"format": {"type": "json_object"}}
         response = await self._get_client().responses.create(**kwargs)
 

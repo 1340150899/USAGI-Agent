@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from pydantic import SecretStr
+from usagi_agent.agents import OutputSchemaDefinition
 from usagi_agent.models import DEFAULT_MODEL, GLM_5_3_FLASH_CODING_PLAN_MODEL
 from usagi_agent.pipelines import ScenarioPipelineInitializer
 from usagi_agent.pipelines.config.stage_config import SCENARIO_CONFIGS
@@ -10,6 +11,7 @@ from usagi_agent.registry import BootstrapSettings
 from usagi_agent.server import Server, ServiceRuntimeInitializer
 
 from .tool_specs import PYTHON_TOOL_SPECS
+from .wechat_worker import WECHAT_MATERIAL_OUTPUT_REF, WECHAT_MATERIAL_OUTPUT_SCHEMA
 from .xhs_mcp import build_xhs_mcp_config
 
 
@@ -54,20 +56,26 @@ async def build_server(*, xhs_url: str | None = None, settings=None):
         _bootstrap_settings(settings, data, key),
         tool_specs=PYTHON_TOOL_SPECS,
     )
+    server = Server(runtime)
     try:
         if xhs_url:
             await runtime.tool_manager.register_mcp(
                 build_xhs_mcp_config(allow_writes=True, url=xhs_url)
             )
-        runtime.agent_manager.create_agent(
+        business_tools = tuple(s.name for s in runtime.tool_manager.all_specs())
+        server.create_agent(
             id="research_writer",
             input_schema="application.request@1.0.0",
-            output_schema="usagi.final_output@1.0.0",
+            output_schema=OutputSchemaDefinition(
+                ref=WECHAT_MATERIAL_OUTPUT_REF,
+                name="wechat_material_result",
+                schema=WECHAT_MATERIAL_OUTPUT_SCHEMA,
+            ),
             model=profiles[profile],
-            allowed_tools=tuple(s.name for s in runtime.tool_manager.all_specs()),
+            allowed_tools=business_tools,
         )
         ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
-        return Server(runtime)
+        return server
     except BaseException:
         await runtime.shutdown()
         raise

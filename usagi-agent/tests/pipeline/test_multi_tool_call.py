@@ -155,11 +155,11 @@ def _build_server(model, tools, tmp_path):
             sqlite_path=str(tmp_path / "runtime.db"),
         )
     )
+    server = Server(runtime)
     runtime.agent_manager.set_model_adapter(model)
-    runtime.agent_manager.create_agent(
+    server.create_agent(
         id="research_writer",
         input_schema="usagi.agent_request@1.0.0",
-        output_schema="usagi.final_output@1.0.0",
         model=GLM_5_2_MODEL.model_copy(
             update={"context_window": 8_000, "default_max_output_tokens": 256}
         ),
@@ -168,7 +168,7 @@ def _build_server(model, tools, tmp_path):
     for tool in tools:
         runtime.tool_manager.register(tool)
     ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
-    return Server(runtime), runtime
+    return server, runtime
 
 
 @pytest.mark.asyncio

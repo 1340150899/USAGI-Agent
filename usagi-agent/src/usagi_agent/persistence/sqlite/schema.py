@@ -144,3 +144,5 @@ def apply_schema(conn) -> None:
     columns = {r[1] for r in conn.execute("PRAGMA table_info(run_controls)")}
     if "final_result_ref" not in columns:
         conn.execute("ALTER TABLE run_controls ADD COLUMN final_result_ref TEXT")
+    if "reason_codes" not in columns:
+        conn.execute("ALTER TABLE run_controls ADD COLUMN reason_codes TEXT NOT NULL DEFAULT '[]'")

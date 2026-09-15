@@ -10,6 +10,8 @@ from usagi_agent.types.run import (
     RunOptions,
     RunOutcome,
     RunStartRequest,
+    StructuredRunError,
+    StructuredRunResult,
 )
 
 __all__ = [
@@ -24,4 +26,6 @@ __all__ = [
     "RunOutcome",
     "RunStartRequest",
     "SessionMessage",
+    "StructuredRunError",
+    "StructuredRunResult",
 ]

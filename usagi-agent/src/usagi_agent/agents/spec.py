@@ -14,6 +14,6 @@ class AgentSpec(BaseModel):
 
     id: str
     input_schema: SchemaRef
-    output_schema: SchemaRef
+    output_schema: SchemaRef | None = None
     model: ModelSpec
     allowed_tools: tuple[str, ...] = Field(default_factory=tuple)

@@ -178,7 +178,6 @@ class ResultProcessProcessor(StageProcessor):
         ):
             action = FinalAction(
                 output_ref=response.content_ref,
-                output_schema="usagi.final_output@1.0.0",
             )
             action_type = "final"
         else:

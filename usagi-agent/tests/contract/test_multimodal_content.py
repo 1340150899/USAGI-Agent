@@ -219,17 +219,15 @@ async def test_run_ingress_delivers_image_part_to_model_context(tmp_path):
             sqlite_path=str(tmp_path / "runtime.db"),
         )
     )
+    server = Server(runtime)
     capture = _CaptureModel()
     runtime.agent_manager.set_model_adapter(capture)
-    runtime.agent_manager.create_agent(
+    server.create_agent(
         id="research_writer",
         input_schema="usagi.agent_request@1.0.0",
-        output_schema="usagi.final_output@1.0.0",
         model=GLM_5_3_FLASH_MODEL,
     )
     ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
-    server = Server(runtime)
-
     handle = await server.create_session(
         RunStartRequest(
             scenario_key="example.research_writer",

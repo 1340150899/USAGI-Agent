@@ -53,6 +53,9 @@ class EndStagePatch(TypedDict, total=False):
     iteration: int
     tool_observation_refs: list[str]
     final_output_ref: str
+    structured_output_attempts: int
+    structured_output_observation_ref: str
+    reason_codes: list[str]
 
 
 PipelineStagePatch = (
@@ -140,6 +143,7 @@ class EndRuleInput(_StageData):
     pass_disposition: str = ""
     tool_observation_refs: tuple[str, ...] = ()
     final_output_ref: str = ""
+    structured_output_attempts: int = 0
 
 
 class EndRuleOutput(_StageData):
@@ -147,3 +151,6 @@ class EndRuleOutput(_StageData):
     iteration: int
     tool_observation_refs: tuple[str, ...] = ()
     final_output_ref: str | None = None
+    structured_output_attempts: int | None = None
+    structured_output_observation_ref: str | None = None
+    reason_codes: tuple[str, ...] = ()

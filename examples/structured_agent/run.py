@@ -35,12 +35,13 @@ def build_server(
             model_execution_mode="scripted" if use_scripted_model else "live"
         )
     )
+    server = Server(runtime)
     tool = SearchToolAdapter()
     tool.spec = tool.spec.model_copy(update={"requires_approval": requires_approval})
     runtime.tool_manager.register(tool)
-    create_research_writer_agent(runtime.agent_manager)
+    create_research_writer_agent(server)
     ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
-    return Server(runtime)
+    return server
 
 
 async def main() -> None:

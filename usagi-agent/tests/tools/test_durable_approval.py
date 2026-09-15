@@ -19,10 +19,11 @@ def build(path):
         sqlite_path=str(path / "runtime.db"), model_execution_mode="scripted",
         resume_hmac_key=SecretStr("durable-test-secret-32-characters"),
     ))
+    server = Server(runtime)
     runtime.tool_manager.register(SearchToolAdapter())
-    create_research_writer_agent(runtime.agent_manager)
+    create_research_writer_agent(server)
     ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
-    return Server(runtime)
+    return server
 
 
 @pytest.mark.asyncio

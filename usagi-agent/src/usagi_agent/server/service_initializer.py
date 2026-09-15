@@ -8,13 +8,17 @@ from usagi_agent.erasure import ErasureInitializer
 from usagi_agent.kernel import KernelInitializer
 from usagi_agent.memory.manager import DefaultMemoryManager
 from usagi_agent.memory.store import MemoryStores
-from usagi_agent.observability import ObservabilityInitializer, configure_service_logging, operation
+from usagi_agent.observability import (
+    ObservabilityInitializer,
+    configure_service_logging,
+    operation,
+)
 from usagi_agent.persistence.backend import PersistenceInitializer
 from usagi_agent.pipelines.compiler import PipelineCompiler
 from usagi_agent.policies.engine import DefaultGuardrail, DefaultPolicyEngine
 from usagi_agent.scenarios import ScenarioRuntimeRegistry
-from usagi_agent.sessions import SessionManager
 from usagi_agent.server.runtime import ServerRuntime
+from usagi_agent.sessions import SessionManager
 from usagi_agent.tools import ToolInitializer
 
 

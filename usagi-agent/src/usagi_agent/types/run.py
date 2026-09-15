@@ -141,6 +141,29 @@ class RunStartRequest(BaseModel):
     options: RunOptions = Field(default_factory=RunOptions)
 
 
+class StructuredRunResult(BaseModel):
+    type: Literal["result"] = "result"
+    subtype: Literal["success"] = "success"
+    is_error: Literal[False] = False
+    run_id: str
+    schema_name: str
+    schema_checksum: str
+    structured_output: dict[str, object]
+
+
+class StructuredRunError(BaseModel):
+    type: Literal["result"] = "result"
+    subtype: Literal[
+        "error_during_execution",
+        "error_invalid_output_schema",
+        "error_max_structured_output_retries",
+        "error_missing_structured_output",
+    ]
+    is_error: Literal[True] = True
+    run_id: str
+    reason_codes: list[str]
+
+
 class RunInputEnvelope(BaseModel):
     """The input-bearing subset loaded from the complete request Artifact."""
 

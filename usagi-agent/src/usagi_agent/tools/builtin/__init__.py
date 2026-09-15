@@ -3,6 +3,7 @@ from usagi_agent.tools.adapter import ToolAdapter
 from usagi_agent.tools.builtin.artifact_reader import ArtifactReaderTool
 from usagi_agent.tools.builtin.calculator import CalculatorTool
 from usagi_agent.tools.builtin.current_time import CurrentTimeTool
+from usagi_agent.tools.builtin.structured_output import StructuredOutputTool
 
 
 def builtin_tools(
@@ -24,4 +25,10 @@ def builtin_tools(
     )
 
 
-__all__ = ["ArtifactReaderTool", "CalculatorTool", "CurrentTimeTool", "builtin_tools"]
+__all__ = [
+    "ArtifactReaderTool",
+    "CalculatorTool",
+    "CurrentTimeTool",
+    "StructuredOutputTool",
+    "builtin_tools",
+]

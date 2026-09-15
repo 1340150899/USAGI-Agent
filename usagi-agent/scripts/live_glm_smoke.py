@@ -67,10 +67,10 @@ async def main() -> None:
                 sqlite_path=str(Path(temp_dir) / "runtime.db"),
             )
         )
-        agent = runtime.agent_manager.create_agent(
+        server = Server(runtime)
+        agent = server.create_agent(
             id="research_writer",
             input_schema="usagi.agent_request@1.0.0",
-            output_schema="usagi.final_output@1.0.0",
             model=GLM_5_3_FLASH_MODEL.model_copy(
                 update={
                     # A small framework budget triggers the real compaction path,
@@ -85,7 +85,6 @@ async def main() -> None:
             _VisibleLiveAdapter(agent.model)
         )
         ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
-        server = Server(runtime)
         request = RunStartRequest(
             scenario_key="example.research_writer",
             request_idempotency_key="live-glm-tool-compaction-final-v1",

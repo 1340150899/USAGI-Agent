@@ -9,7 +9,7 @@ from examples.structured_agent.tools import SearchToolAdapter
 from usagi_agent.api.errors import UnknownToolError
 from usagi_agent.pipelines import ScenarioPipelineInitializer
 from usagi_agent.registry import BootstrapSettings
-from usagi_agent.server import ServiceRuntimeInitializer
+from usagi_agent.server import Server, ServiceRuntimeInitializer
 from usagi_agent.tools import ToolAdapter, ToolSpec, to_model_tool
 from usagi_agent.ports import ToolContext
 from usagi_agent.prompts import RESEARCH_WRITER_PROMPT, prompt_for_agent
@@ -75,9 +75,10 @@ def test_pipeline_init_reuses_service_instances_and_scenario_has_no_tools(tmp_pa
     runtime = ServiceRuntimeInitializer.init(
         BootstrapSettings(model_execution_mode="scripted", sqlite_path=str(tmp_path / "runtime.db"))
     )
+    server = Server(runtime)
     persistence = runtime.persistence
     runtime.tool_manager.register(SearchToolAdapter())
-    create_research_writer_agent(runtime.agent_manager)
+    create_research_writer_agent(server)
     ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
     scenario = runtime.scenario_registry.get("example.research_writer")
     assert runtime.persistence is persistence
@@ -115,7 +116,7 @@ def test_prompt_is_resolved_from_static_catalog_not_agent_or_manager_state(tmp_p
     runtime = ServiceRuntimeInitializer.init(
         BootstrapSettings(model_execution_mode="scripted", sqlite_path=str(tmp_path / "runtime.db"))
     )
-    registered = create_research_writer_agent(runtime.agent_manager)
+    registered = create_research_writer_agent(Server(runtime))
     assert "prompt" not in type(registered).model_fields
     assert prompt_for_agent(registered.id) is RESEARCH_WRITER_PROMPT
     assert not hasattr(runtime.agent_manager, "render_prompt")

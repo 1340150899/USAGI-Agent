@@ -61,7 +61,6 @@ class InMemorySessionStore:
             self._by_id[session_id] = record
             return record
 
-
 class InMemoryApprovalStore:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()

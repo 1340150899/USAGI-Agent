@@ -60,6 +60,7 @@ class RunControlState(BaseModel):
     accepted_resume_attempt_id: str | None = None
     budget_used: BudgetUsage = Field(default_factory=BudgetUsage)
     final_result_ref: ArtifactRef | None = None
+    reason_codes: list[str] = Field(default_factory=list)
     cancel_requested_at: datetime | None = None
     cancelled_at: datetime | None = None
     cancellation_reason_code: CancellationReasonCode | None = None

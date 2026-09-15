@@ -16,7 +16,11 @@ from usagi_agent.pipelines.config.context_build import ContextBuildPipelineConfi
 from usagi_agent.pipelines.loop.state import AgentRunState
 from usagi_agent.pipelines.processors.base import StageProcessor
 from usagi_agent.pipelines.rules.stage import ContextBuildStagePatch, RuleExecutionError
-from usagi_agent.prompts import CONTEXT_COMPACTION_PROMPT, prompt_for_agent
+from usagi_agent.prompts import (
+    CONTEXT_COMPACTION_PROMPT,
+    STRUCTURED_OUTPUT_PROMPT,
+    prompt_for_agent,
+)
 from usagi_agent.tools import AllowlistSelector, to_model_tool
 from usagi_agent.types.content import model_content_from_parts
 from usagi_agent.types.model import ModelRequest
@@ -165,6 +169,13 @@ class ContextBuildProcessor(StageProcessor):
     ) -> tuple[str, str]:
         prompt = prompt_for_agent(self.agent.id)
         model = self.agent.model
+        contract = context.output_contract
+        system_prompt = prompt.render()
+        allowed_tools = self.runtime.agent_manager.get(self.agent.id).allowed_tools
+        if contract is not None:
+            system_prompt += "\n\n" + STRUCTURED_OUTPUT_PROMPT.render(
+                {"terminal_tool_name": contract.terminal_tool_name}
+            )
         messages: list[dict[str, object]] = []
         if prepared.session.summary:
             messages.append(
@@ -224,18 +235,19 @@ class ContextBuildProcessor(StageProcessor):
         )
         request = ModelRequest(
             prompt_ref=prompt.id,
-            system_prompt=prompt.render(),
+            system_prompt=system_prompt,
             messages_ref=artifact_ref,
             context_pack_ref=artifact_ref,
             messages=envelope.messages,
             tools=[
                 to_model_tool(spec)
                 for spec in await self.tool_selector.select(
-                    self.agent.allowed_tools,
+                    allowed_tools,
                     token_budget=max(1, model.context_window // 8),
                 )
             ],
             max_output_tokens=model.default_max_output_tokens,
+            response_format="text" if contract is not None else "json_object",
         )
         model_request_ref = await put_model(
             self.runtime.persistence.artifact_manager,

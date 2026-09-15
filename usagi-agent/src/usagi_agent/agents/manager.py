@@ -4,6 +4,7 @@ from __future__ import annotations
 import inspect
 import os
 from collections import defaultdict
+from collections.abc import Mapping
 from decimal import Decimal
 from typing import Literal
 
@@ -14,6 +15,7 @@ from usagi_agent.agents.model_adapter_factory import (
 )
 from usagi_agent.agents.model_adapters import ScriptedModelAdapter
 from usagi_agent.agents.spec import AgentSpec
+from usagi_agent.agents.schemas import OutputContract, OutputSchemaManager
 from usagi_agent.api.errors import DuplicateAgentError, UnknownAgentError
 from usagi_agent.ports import HealthStatus, ModelAdapter, ToolContext
 from usagi_agent.types.model import ModelRequest, ModelResponse, ModelSpec, ModelUsage
@@ -22,7 +24,8 @@ from usagi_agent.types.refs import SchemaRef
 
 class AgentManager:
     def __init__(
-        self, model_execution_mode: Literal["live", "scripted"] = "live"
+        self,
+        model_execution_mode: Literal["live", "scripted"] = "live",
     ) -> None:
         self._agents: dict[str, AgentSpec] = {}
         self._model_adapter: ModelAdapter | None = (
@@ -30,27 +33,36 @@ class AgentManager:
         )
         self._live_adapters: dict[ModelAdapterCacheKey, ModelAdapter] = {}
         self._usage_by_agent: dict[str, ModelUsage] = defaultdict(ModelUsage)
+        self._output_schemas = OutputSchemaManager()
 
-    def create_agent(
+    def compile_output_schema(
         self,
+        ref: SchemaRef,
         *,
-        id: str,
-        input_schema: SchemaRef,
-        output_schema: SchemaRef,
-        model: ModelSpec,
-        allowed_tools: tuple[str, ...] = (),
-    ) -> AgentSpec:
-        spec = AgentSpec(
-            id=id,
-            input_schema=input_schema,
-            output_schema=output_schema,
-            model=model,
-            allowed_tools=allowed_tools,
+        name: str,
+        schema: Mapping[str, object],
+        max_retries: int = 5,
+    ) -> OutputContract:
+        """Compile and register an Agent-owned output schema."""
+        return self._output_schemas.register(
+            ref, name=name, schema=schema, max_retries=max_retries
         )
+
+    def resolve_output_schema(self, ref: SchemaRef) -> OutputContract:
+        return self._output_schemas.resolve(ref)
+
+    def register(self, spec: AgentSpec) -> AgentSpec:
+        """Register an already assembled Agent declaration."""
+        if spec.output_schema is not None:
+            self.resolve_output_schema(spec.output_schema)
         if spec.id in self._agents:
             raise DuplicateAgentError(spec.id)
         self._agents[spec.id] = spec
         return spec
+
+    def output_contract(self, agent_id: str) -> OutputContract | None:
+        ref = self.get(agent_id).output_schema
+        return self._output_schemas.resolve(ref) if ref is not None else None
 
     def get(self, agent_id: str) -> AgentSpec:
         try:

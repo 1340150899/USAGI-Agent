@@ -17,6 +17,9 @@ RUN_SCOPED_STATE_FIELDS = frozenset(
         "tool_observation_refs",
         "side_effect_receipt_refs",
         "final_output_ref",
+        "output_schema_checksum",
+        "structured_output_attempts",
+        "structured_output_observation_ref",
     }
 )
 
@@ -76,6 +79,9 @@ class AgentRunState(TypedDict, total=False):
     tool_observation_refs: Annotated[list[str], append_dedup]
     side_effect_receipt_refs: Annotated[list[str], append_dedup]
     final_output_ref: str
+    output_schema_checksum: str
+    structured_output_attempts: Annotated[int, last_write]
+    structured_output_observation_ref: str
 
     # Pass-scoped fields, reset by PreRecall before every pass.
     recall_plan_ref: str

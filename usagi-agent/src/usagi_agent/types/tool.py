@@ -5,17 +5,18 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from usagi_agent.types.settlement import WriteSafetyMode
 from usagi_agent.types.content import ContentPart
 from usagi_agent.types.refs import ArtifactRef
+from usagi_agent.types.settlement import WriteSafetyMode
+
 
 ToolErrorCode = Literal[
     "tool.invalid_arguments",  # arguments failed the declared parameter schema
-    "tool.parse_error",        # model-emitted arguments were not valid JSON
-    "tool.denied",             # scope or policy refused execution
-    "tool.timeout",            # execution exceeded timeout_seconds (read class)
-    "tool.execution_failed",   # adapter raised or returned an unusable result
-    "tool.unknown",            # write-class timeout/crash: result cannot be assumed
+    "tool.parse_error",  # model-emitted arguments were not valid JSON
+    "tool.denied",  # scope or policy refused execution
+    "tool.timeout",  # execution exceeded timeout_seconds (read class)
+    "tool.execution_failed",  # adapter raised or returned an unusable result
+    "tool.unknown",  # write-class timeout/crash: result cannot be assumed
 ]
 
 
@@ -26,7 +27,13 @@ class ToolSpec(BaseModel):
 
     name: str
     description: str
-    parameters: dict[str, Any] = Field(default_factory=dict)
+    parameters: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": True,
+        }
+    )
     requires_approval: bool = True
     # Capability metadata: risk drives retry/timeout semantics; approval is explicit.
     risk: Literal["read", "write", "high_risk_write"] = "read"

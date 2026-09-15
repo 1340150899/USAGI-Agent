@@ -13,7 +13,6 @@ from usagi_agent.types.refs import PrincipalRef, ArtifactOwner
 from usagi_agent.types.content import ImageContentPart
 from usagi_agent.types.run import RunStartRequest
 
-from .draft_images import selected_image_indices
 
 log = logging.getLogger(__name__)
 
@@ -150,7 +149,10 @@ class ApplicationService:
         media_ids = self.store.session_media_ids(session_id)
         if not media_ids:
             return []
-        indices = selected_image_indices(result.message, total=len(media_ids))
+        output = getattr(result, "structured_output", None)
+        indices = output.get("selected_image_indices", []) if isinstance(output, dict) else []
+        if not isinstance(indices, list):
+            return []
         if not indices:
             return []
         return [media_ids[index - 1] for index in indices]

@@ -248,10 +248,10 @@ async def recognize_folder(args: argparse.Namespace) -> int:
             context_window=128_000,
             default_max_output_tokens=args.max_output_tokens,
         )
-        runtime.agent_manager.create_agent(
+        server = Server(runtime)
+        server.create_agent(
             id="research_writer",
             input_schema="usagi.image_recognition_request@1.0.0",
-            output_schema="usagi.final_output@1.0.0",
             model=model,
             allowed_tools=(),
         )
@@ -263,7 +263,6 @@ async def recognize_folder(args: argparse.Namespace) -> int:
             )
         )
         ScenarioPipelineInitializer.init(runtime, SCENARIO_CONFIGS)
-        server = Server(runtime)
         try:
             for index, path in enumerate(images, start=1):
                 print(f"\n[{index}/{len(images)}] USAGI 全流程识别 {path.name} ...")

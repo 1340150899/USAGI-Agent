@@ -77,9 +77,9 @@ class ModelExecutionRule(ModelRuleAdapterConfig):
                     break
                 if attempt == 1:
                     raise RuntimeError("model returned empty content after one retry")
-                if attempt_request.structured_output:
+                if attempt_request.response_format == "json_object":
                     attempt_request = attempt_request.model_copy(
-                        update={"structured_output": False}
+                        update={"response_format": "text"}
                     )
             assert response is not None
             telemetry.set_attribute(

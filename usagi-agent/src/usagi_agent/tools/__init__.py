@@ -5,6 +5,7 @@ from usagi_agent.tools.manager import ToolManager
 from usagi_agent.tools.mcp import MCPServerConfig
 from usagi_agent.tools.render import render_model_content
 from usagi_agent.tools.selector import AllowlistSelector
+from usagi_agent.tools.builtin.structured_output import StructuredOutputTool
 from usagi_agent.tools.spec import ToolSpec, to_model_tool
 
 __all__ = [
@@ -12,6 +13,7 @@ __all__ = [
     "ToolAdapter",
     "ToolInitializer",
     "ToolManager",
+    "StructuredOutputTool",
     "MCPServerConfig",
     "ToolSpec",
     "render_model_content",

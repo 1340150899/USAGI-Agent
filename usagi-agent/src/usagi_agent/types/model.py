@@ -51,7 +51,12 @@ class ModelRequest(BaseModel):
     messages: list[dict[str, object]] = Field(default_factory=list)
     max_output_tokens: int
     temperature: float = 0.0
-    structured_output: bool = True
+    response_format: Literal["text", "json_object"] = "json_object"
+
+    @property
+    def structured_output(self) -> bool:
+        """Compatibility view for callers migrating from the old ambiguous name."""
+        return self.response_format == "json_object"
 
 
 class ModelToolCall(BaseModel):
